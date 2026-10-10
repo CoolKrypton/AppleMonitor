@@ -137,7 +137,12 @@ class HostConnectionController extends ChangeNotifier {
         _defaultDeviceName();
     _paired = await _store.loadPairedHost();
 
-    await _discovery.start();
+    try {
+      await _discovery.start();
+    } catch (_) {
+      // A socket that cannot be opened is reported by the scan that follows,
+      // not here: start() must still publish the paired-host state.
+    }
     _hostSubscription = _discovery.onHost.listen(_onHostSeen);
     _grantSubscription = _discovery.onGrant.listen(_onGrant);
 
@@ -175,39 +180,39 @@ class HostConnectionController extends ChangeNotifier {
 
   /// Runs one discovery window. Safe to call while one is already running.
   Future<void> scan({Duration window = const Duration(seconds: 4)}) async {
-    await _discovery.start();
+    try {
+      await _discovery.start();
+    } catch (_) {
+      // Reported through the failure message below, never thrown at the caller.
+    }
     _scanTimer?.cancel();
     _hosts = <DiscoveredHost>[];
     _scanTicks = 0;
+    _discovery.resetStats();
     _setState(HostConnectionState.scanning, 'Scanning the local network');
 
-    // Three rounds inside the window: broadcast UDP is lossy even on a quiet
-    // LAN, and a probe is 200 bytes.
+    // Several rounds inside the window: UDP is lossy even on a quiet LAN, a
+    // probe is 200 bytes, and every round reshuffles the sweep order.
     final int ticks = (window.inMilliseconds / 800).ceil();
     Future<void> probe() async {
       _scanTicks++;
-      await _discovery.probeOnce(
-        deviceId: _deviceId,
-        deviceName: _deviceName,
-        pairedHostId: _paired?.endpoint.hostId,
-        lastKnownHostIp: _paired?.endpoint.ip,
-      );
+      try {
+        await _discovery.probeOnce(
+          deviceId: _deviceId,
+          deviceName: _deviceName,
+          pairedHostId: _paired?.endpoint.hostId,
+          lastKnownHostIp: _paired?.endpoint.ip,
+        );
+      } catch (_) {
+        // A round that cannot send must not end the window: the remaining
+        // rounds still get their turn, so one refusal cannot look like a
+        // finished scan.
+      }
       if (_scanTicks >= ticks) {
         _scanTimer?.cancel();
         _scanTimer = null;
         if (_hosts.isEmpty) {
-          // The two causes differ per platform, so say the one that applies
-          // rather than a list the user has to work through. On iOS the local
-          // network permission is denied silently - sends just go nowhere -
-          // which makes it by far the most common reason for an empty scan.
-          _fail(
-            Platform.isIOS
-                ? 'No PC found. Allow PC Monitor under Settings > Privacy & '
-                    'Security > Local Network, then check PCMonitorHost is '
-                    'running with "LAN pairing" enabled on this Wi-Fi.'
-                : 'No PC found. Check that PCMonitorHost is running and that '
-                    '"LAN pairing" is enabled in its settings.',
-          );
+          _fail(_emptyScanMessage());
         } else {
           _setState(HostConnectionState.found, '${_hosts.length} PC${_hosts.length == 1 ? '' : 's'} found');
         }
@@ -220,6 +225,22 @@ class HostConnectionController extends ChangeNotifier {
       (_) => probe(),
     );
     notifyListeners();
+  }
+
+  /// Why a scan came back empty, said differently per platform.
+  ///
+  /// On iOS the transport fails silently, so the counters go in front where a
+  /// two-line caption cannot ellipsize them away, followed by the one setting
+  /// that is worth checking. On Android the app side is rarely at fault, so the
+  /// message points at the host instead.
+  String _emptyScanMessage() {
+    if (!Platform.isIOS) {
+      return 'No PC found. Check that PCMonitorHost is running and that '
+          '"LAN pairing" is enabled in its settings.';
+    }
+    return 'No PC found. ${_discovery.lastReport.compact} | Allow PC Monitor '
+        'under Settings > Privacy & Security > Local Network, and enable '
+        '"LAN pairing" on the PC.';
   }
 
   void _onHostSeen(DiscoveredHost host) {
