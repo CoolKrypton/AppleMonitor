@@ -148,8 +148,16 @@ void main() {
     return MonitorThemeScope(
       controller: controller ?? ThemeController(),
       child: MaterialApp(
-        home: ResponsiveBuilder(
-          builder: (BuildContext context, LayoutMetrics metrics) => child,
+        // The screens are pumped directly rather than through navigation, so
+        // nothing here supplies the `Material` ancestor that a Scaffold would
+        // in the real app. Widgets such as InkWell assert on its absence, so
+        // one transparent Material restores that ancestor without changing
+        // layout, colour or the number of rendered texts.
+        home: Material(
+          type: MaterialType.transparency,
+          child: ResponsiveBuilder(
+            builder: (BuildContext context, LayoutMetrics metrics) => child,
+          ),
         ),
       ),
     );

@@ -93,24 +93,27 @@ void main() {
     test('six themes are available and each has a distinct background', () {
       expect(kMonitorThemes.length, 6);
       final Set<int> backgrounds =
-          kMonitorThemes.map((MonitorTheme t) => t.bg.value).toSet();
+          kMonitorThemes.map((MonitorTheme t) => t.bg.toARGB32()).toSet();
       expect(backgrounds.length, 6);
     });
 
     test('the default theme is the firmware palette, so parity is preserved', () {
+      // Values lifted verbatim from `ui_style.h`. Compare the full ARGB word:
+      // the theme holds opaque colours (0xFF......), so a bare RGB literal
+      // such as 0x0B1017 would be comparing against a transparent colour.
       final MonitorTheme firmware = kMonitorThemes.first;
-      expect(firmware.bg.value, 0x0B1017);
-      expect(firmware.panel.value, 0x131C27);
-      expect(firmware.border.value, 0x243140);
-      expect(firmware.track.value, 0x243342);
-      expect(firmware.text.value, 0xEDF3FA);
-      expect(firmware.muted.value, 0x8C9EB2);
-      expect(firmware.cpu.value, 0x55D9E8);
-      expect(firmware.gpu.value, 0xB0E580);
-      expect(firmware.ram.value, 0x94A9FF);
-      expect(firmware.vram.value, 0xD5B3EE);
-      expect(firmware.hot.value, 0xF4BA73);
-      expect(firmware.danger.value, 0xF06F6F);
+      expect(firmware.bg.toARGB32(), 0xFF0B1017);
+      expect(firmware.panel.toARGB32(), 0xFF131C27);
+      expect(firmware.border.toARGB32(), 0xFF243140);
+      expect(firmware.track.toARGB32(), 0xFF243342);
+      expect(firmware.text.toARGB32(), 0xFFEDF3FA);
+      expect(firmware.muted.toARGB32(), 0xFF8C9EB2);
+      expect(firmware.cpu.toARGB32(), 0xFF55D9E8);
+      expect(firmware.gpu.toARGB32(), 0xFFB0E580);
+      expect(firmware.ram.toARGB32(), 0xFF94A9FF);
+      expect(firmware.vram.toARGB32(), 0xFFD5B3EE);
+      expect(firmware.hot.toARGB32(), 0xFFF4BA73);
+      expect(firmware.danger.toARGB32(), 0xFFF06F6F);
     });
 
     test('every theme converts to a ThemeData', () {
@@ -142,11 +145,15 @@ void main() {
       );
     });
 
-    test('the single-adapter shortcut resolves to a real GPU', () {
+    test('the single-adapter shortcut fires only for exactly one adapter', () {
       final MonitorProvider provider = MonitorProvider(simulate: true);
       addTearDown(provider.dispose);
-      if (provider.target.gpuCount > 0) {
-        expect(provider.singleGpuShortcut(), isA<int>());
+      // Mirrors `ui_app_show_gpus()`: the shortcut exists only when the host
+      // reports *exactly one* adapter; with two or more the selector is used.
+      if (provider.target.gpuCount == 1) {
+        expect(provider.singleGpuShortcut(), 0);
+      } else {
+        expect(provider.singleGpuShortcut(), isNull);
       }
     });
 
@@ -166,13 +173,19 @@ void main() {
   });
 
   group('HUD primitives', () {
+    /// HudPanel/HudBar read the active theme through `MonitorThemeScope.of`,
+    /// which asserts that the scope is present. In the app that scope wraps the
+    /// whole tree, so the test has to provide it too.
+    Widget themed(Widget child) => MonitorThemeScope(
+          controller: ThemeController(),
+          child: MaterialApp(
+            home: Scaffold(body: child),
+          ),
+        );
+
     testWidgets('HudPanel renders its child', (tester) async {
       await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: HudPanel(child: const Text('panel-body')),
-          ),
-        ),
+        themed(const HudPanel(child: Text('panel-body'))),
       );
       expect(find.text('panel-body'), findsOneWidget);
     });
@@ -180,22 +193,20 @@ void main() {
     testWidgets('HudBar tolerates both a reading and a placeholder',
         (tester) async {
       await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: Column(
-              children: <Widget>[
-                const HudBar(
-                  value: 42,
-                  color: Color(0xFF55D9E8),
-                  valid: true,
-                ),
-                const HudBar(
-                  value: 0,
-                  color: Color(0xFF55D9E8),
-                  valid: false,
-                ),
-              ],
-            ),
+        themed(
+          const Column(
+            children: <Widget>[
+              HudBar(
+                value: 42,
+                color: Color(0xFF55D9E8),
+                valid: true,
+              ),
+              HudBar(
+                value: 0,
+                color: Color(0xFF55D9E8),
+                valid: false,
+              ),
+            ],
           ),
         ),
       );

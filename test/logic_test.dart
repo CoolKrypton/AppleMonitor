@@ -24,7 +24,8 @@ void main() {
     test('a valid zero is a real reading, not a placeholder', () {
       expect(fmtPercent(0, true), '0%');
       expect(fmtTemp(0, true), '0.0 C');
-      expect(fmtPower(0, true), '0.0 W');
+      // %.0f W, matching preview/ui_preview.html's fmtPower.
+      expect(fmtPower(0, true), '0 W');
     });
 
     test('placeholder constants keep the firmware spellings', () {
@@ -110,14 +111,18 @@ void main() {
     test('primaryGpu follows the supplied fallback index, clamped', () {
       // Mirrors `pc_status_primary_gpu()`: the index is clamped into range.
       // It is NOT a search for the discrete adapter.
-      expect(status.primaryGpu(0)?.id, 'gpu-intel');
-      expect(status.primaryGpu(1)?.id, 'gpu-nv');
-      expect(status.primaryGpu(9)?.id, 'gpu-nv');
+      //
+      // Identity is `protocolId`. `GpuStatus.id` is a *different* field (the
+      // hash of the protocol id, kept for wire compatibility) and is
+      // deliberately not what the UI keys off.
+      expect(status.primaryGpu(0)?.protocolId, 'gpu-intel');
+      expect(status.primaryGpu(1)?.protocolId, 'gpu-nv');
+      expect(status.primaryGpu(9)?.protocolId, 'gpu-nv');
     });
 
     test('gpuAt is bounds checked', () {
-      expect(status.gpuAt(0)?.id, 'gpu-intel');
-      expect(status.gpuAt(1)?.id, 'gpu-nv');
+      expect(status.gpuAt(0)?.protocolId, 'gpu-intel');
+      expect(status.gpuAt(1)?.protocolId, 'gpu-nv');
       expect(status.gpuAt(9), isNull);
     });
   });
@@ -169,13 +174,31 @@ void main() {
   });
 
   group('unit conversions', () {
+    // The conversion happens exactly once, at parse time:
+    // `PcStatus.fromTelemetry` divides `totalBytes`/`usedBytes` by 1024^3 and
+    // `frequencyMHz` by 1000. The models therefore hold GiB and GHz, and the
+    // fmt* helpers only attach the unit -- they must be handed an
+    // already-converted value. These two tests pin the conversion at the layer
+    // that actually performs it, then confirm the formatter's own contract.
     test('bytes -> GiB uses 1024^3', () {
-      expect(fmtGiB(1073741824, true), '1.0 GiB');
-      expect(fmtGiB(17179869184, true), '16.0 GiB');
+      final PcStatus s = PcStatus.fromTelemetry(<String, dynamic>{
+        'memory': <String, dynamic>{
+          'totalBytes': 17179869184,
+          'usedBytes': 1073741824,
+        },
+      });
+      expect(s.ramUsed, closeTo(1.0, 1e-9));
+      expect(s.ramTotal, closeTo(16.0, 1e-9));
+      expect(fmtGiB(s.ramUsed, s.ramUsedValid), '1.0 GiB');
+      expect(fmtGiB(s.ramTotal, s.ramTotalValid), '16.0 GiB');
     });
 
     test('MHz -> GHz divides by 1000', () {
-      expect(fmtClock(4700, true), '4.70 GHz');
+      final PcStatus s = PcStatus.fromTelemetry(<String, dynamic>{
+        'cpu': <String, dynamic>{'frequencyMHz': 4700},
+      });
+      expect(s.cpuClock, closeTo(4.7, 1e-9));
+      expect(fmtClock(s.cpuClock, s.cpuClockValid), '4.70 GHz');
     });
 
     test('disk bytes/s is decoded as decimal MB/s', () {
