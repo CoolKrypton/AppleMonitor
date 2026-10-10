@@ -265,12 +265,23 @@ class DashboardStatusBar extends StatelessWidget {
           SizedBox(width: metrics.px(8)),
           Tooltip(
             message: 'Hosts and pairing',
-            child: InkWell(
-              onTap: onOpenHosts,
-              borderRadius: BorderRadius.circular(6),
-              child: Padding(
-                padding: EdgeInsets.all(metrics.px(3)),
-                child: HudBadge(label: provider.connectionLabel, color: badgeColor),
+            // An InkWell asserts unless a Material sits above it, and nothing in
+            // the status bar's ancestry supplies one - HudPanel deliberately
+            // stays outside Material so its labels keep the explicit
+            // `decoration: none` from the theme. Wrap the same way HudButton
+            // does, so the badge gets an ink surface to splash on.
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: onOpenHosts,
+                borderRadius: BorderRadius.circular(6),
+                child: Padding(
+                  padding: EdgeInsets.all(metrics.px(3)),
+                  child: HudBadge(
+                    label: provider.connectionLabel,
+                    color: badgeColor,
+                  ),
+                ),
               ),
             ),
           ),
@@ -336,12 +347,21 @@ class _ThemeButton extends StatelessWidget {
     final LayoutMetrics metrics = context.layout;
     return Tooltip(
       message: 'Interface theme',
-      child: InkWell(
-        borderRadius: BorderRadius.circular(6),
-        onTap: () => ThemePickerSheet.show(context),
-        child: Padding(
-          padding: EdgeInsets.all(metrics.px(4)),
-          child: Icon(Icons.palette_outlined, color: theme.cpu, size: metrics.px(17)),
+      // Same reason as the status bar's host badge: an InkWell needs a Material
+      // ancestor, and this row lives outside every HudPanel.
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(6),
+          onTap: () => ThemePickerSheet.show(context),
+          child: Padding(
+            padding: EdgeInsets.all(metrics.px(4)),
+            child: Icon(
+              Icons.palette_outlined,
+              color: theme.cpu,
+              size: metrics.px(17),
+            ),
+          ),
         ),
       ),
     );

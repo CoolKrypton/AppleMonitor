@@ -148,18 +148,34 @@ void main() {
     return MonitorThemeScope(
       controller: controller ?? ThemeController(),
       child: MaterialApp(
-        // The screens are pumped directly rather than through navigation, so
-        // nothing here supplies the `Material` ancestor that a Scaffold would
-        // in the real app. Widgets such as InkWell assert on its absence, so
-        // one transparent Material restores that ancestor without changing
-        // layout, colour or the number of rendered texts.
-        home: Material(
-          type: MaterialType.transparency,
-          child: ResponsiveBuilder(
-            builder: (BuildContext context, LayoutMetrics metrics) => child,
-          ),
+        home: ResponsiveBuilder(
+          builder: (BuildContext context, LayoutMetrics metrics) => child,
         ),
       ),
+    );
+  }
+
+  /// Same assertion as `expect(tester.takeException(), isNull)`, but it names
+  /// the flex that overflowed.
+  ///
+  /// Flutter's own report for an overflow is only "A RenderFlex overflowed by
+  /// N pixels on the bottom" - no file, no line. The render tree already marks
+  /// the culprit as `OVERFLOWING` and knows its creator, so say so and save a
+  /// round trip through CI.
+  void expectNoOverflow(WidgetTester tester) {
+    final Object? exception = tester.takeException();
+    if (exception == null) {
+      return;
+    }
+    final String culprits = <String>[
+      for (final RenderObject object in tester.allRenderObjects)
+        if (object.toStringShort().contains('OVERFLOWING'))
+          '${object.toStringShort()}\n    created by ${object.debugCreator}',
+    ].join('\n  ');
+    expect(
+      exception,
+      isNull,
+      reason: culprits.isEmpty ? null : 'overflowing render objects:\n  $culprits',
     );
   }
 
@@ -517,7 +533,7 @@ void main() {
       )));
       await tester.pump();
 
-      expect(tester.takeException(), isNull);
+      expectNoOverflow(tester);
       // No bare-year text anywhere, full dates present (status bar + card).
       expect(find.text(year), findsNothing);
       expect(
@@ -540,7 +556,7 @@ void main() {
       )));
       await tester.pump();
 
-      expect(tester.takeException(), isNull);
+      expectNoOverflow(tester);
       // Exactly one bare-year text (the clock card); the full date survives
       // only in the status bar.
       expect(find.text(year), findsOneWidget);
