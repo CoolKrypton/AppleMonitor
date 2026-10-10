@@ -196,9 +196,17 @@ class HostConnectionController extends ChangeNotifier {
         _scanTimer?.cancel();
         _scanTimer = null;
         if (_hosts.isEmpty) {
+          // The two causes differ per platform, so say the one that applies
+          // rather than a list the user has to work through. On iOS the local
+          // network permission is denied silently - sends just go nowhere -
+          // which makes it by far the most common reason for an empty scan.
           _fail(
-            'No PC found. Check that PCMonitorHost is running and that '
-            '"LAN pairing" is enabled in its settings.',
+            Platform.isIOS
+                ? 'No PC found. Allow PC Monitor under Settings > Privacy & '
+                    'Security > Local Network, then check PCMonitorHost is '
+                    'running with "LAN pairing" enabled on this Wi-Fi.'
+                : 'No PC found. Check that PCMonitorHost is running and that '
+                    '"LAN pairing" is enabled in its settings.',
           );
         } else {
           _setState(HostConnectionState.found, '${_hosts.length} PC${_hosts.length == 1 ? '' : 's'} found');

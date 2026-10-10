@@ -64,17 +64,47 @@ import UIKit
 
   /// The iOS counterpart of `MainActivity.deviceName()`.
   ///
-  /// `UIDevice.name` is the user-visible device name the host dialog should
-  /// show. Since iOS 16 it returns a generic model name ("iPhone", "iPad")
-  /// unless the app also holds Apple's
+  /// `UIDevice.name` used to be the whole story, but since iOS 16 it returns a
+  /// generic product name ("iPhone", "iPad") unless the app holds Apple's
   /// `com.apple.developer.device-information.user-assigned-device-name`
-  /// entitlement - which is fine: a generic model is still a far better label
-  /// than the synthetic fallback, and the Dart side treats an empty answer as
-  /// "no platform name available" rather than as a name.
+  /// entitlement - which is granted per app on request and is out of reach for
+  /// a free developer account.
+  ///
+  /// The Bonjour hostname is the way back in. iOS derives it from the same
+  /// user-assigned name and, unlike `UIDevice.name`, does not gate it behind
+  /// that entitlement: a device named "Alice's iPhone" advertises itself as
+  /// `Alices-iPhone.local`. Undo the two transformations the OS applies and
+  /// the original name falls out.
   private static func deviceName() -> String {
-    let name = UIDevice.current.name.trimmingCharacters(in: .whitespacesAndNewlines)
-    if !name.isEmpty { return name }
+    let uiName = UIDevice.current.name.trimmingCharacters(in: .whitespacesAndNewlines)
+
+    var host = ProcessInfo.processInfo.hostName
+    if host.hasSuffix(".local") { host.removeLast(6) }
+    // A name collision on the network makes Bonjour append "-2", "-3", ...
+    if let suffix = host.range(of: #"-\d+$"#, options: .regularExpression) {
+      host.removeSubrange(suffix)
+    }
+    host = host.replacingOccurrences(of: "-", with: " ")
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+
     let model = UIDevice.current.model.trimmingCharacters(in: .whitespacesAndNewlines)
+
+    // Order matters: the hostname is the only one of the three that still
+    // carries the user-assigned name on iOS 16+.
+    for candidate in [host, uiName, model] where isSpecific(candidate) {
+      return candidate
+    }
     return model.isEmpty ? "iOS device" : model
   }
+
+  /// Rejects the generic product names iOS hands out when it is withholding
+  /// the user-assigned name - "iPhone" identifies nothing in a pairing dialog.
+  private static func isSpecific(_ name: String) -> Bool {
+    guard name.count >= 2 else { return false }
+    return !genericNames.contains(name.lowercased())
+  }
+
+  private static let genericNames: Set<String> = [
+    "iphone", "ipad", "ipod touch", "apple tv", "localhost", "ios device",
+  ]
 }

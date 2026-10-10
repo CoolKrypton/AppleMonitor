@@ -295,6 +295,12 @@ class HostDiscoveryService {
         }
       }
     }
+
+    // The answering side caps how many probes it will reply to per second, and
+    // a burst walks this list in order - so a fixed order would keep testing
+    // the same handful of addresses on every round while the rest of the /24
+    // went unanswered. Shuffling makes each round cover a different slice.
+    targets.shuffle();
     return targets;
   }
 
