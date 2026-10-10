@@ -60,17 +60,24 @@
 
 ### 2.2 装上 Windows 端的签名工具
 
-按这个顺序装，缺一不可：
+**是的，iTunes 和 iCloud 两个都要装**，加上 Sideloadly 一共三样。按这个顺序：
 
-| 顺序 | 装什么 | 从哪装 | 注意 |
+| 顺序 | 装什么 | 从哪装 | 干什么用的 |
 | --- | --- | --- | --- |
-| 1 | **iTunes** | <https://www.apple.com/itunes/download/win64> | ⚠️ **不要**从 Microsoft Store 装 |
-| 2 | **iCloud** | <https://support.apple.com/zh-cn/106176> | ⚠️ 同上，要 Apple 官网的独立安装包 |
-| 3 | **Sideloadly** | <https://sideloadly.app/> | 免费 |
+| 1 | **iTunes**（独立安装包） | <https://www.apple.com/itunes/download/win64> | 装 USB 驱动（Apple Mobile Device Support）—— 没它 Sideloadly 根本看不到你的 iPhone |
+| 2 | **iCloud**（独立安装包） | <https://updates.cdn-apple.com/2020/windows/001-39935-20200911-1A70AA56-F448-11EA-8CC0-99D41950005E/iCloudSetup.exe> | 提供 **Anisette** 认证组件 —— 免费 Apple ID 签名时跟苹果服务器握手要靠它 |
+| 3 | **Sideloadly** | <https://sideloadly.io> | 签名 + 安装。官网 64 位直链：<https://sideloadly.io/SideloadlySetup64.exe> |
 
-**为什么必须是官网独立安装包而不是商店版？** Sideloadly 要用苹果官方的 USB 驱动跟手机通信，还要用 iCloud 里的 Anisette 组件去跟苹果服务器完成握手 —— 商店版做了沙箱隔离，Sideloadly 找不到它，会在登录 Apple ID 那一步卡死。
+> ⚠️ **第 1、2 个必须是"官方独立安装包"，不能是 Microsoft Store 版。** 商店版做了沙箱隔离，Sideloadly 找不到里面的驱动和组件，会在"连接设备"或"登录 Apple ID"那一步卡死。如果你之前从商店装过 iTunes / iCloud（或苹果新的 **"Apple Devices"** 应用），先去 `设置 → 应用` 里卸载干净再装独立包。
+
+> 💡 **关于第 2 个（iCloud）的两个常见疑惑：**
+>
+> - **不用登录 iCloud。** 装完就行，它的作用只是把组件放到系统里，全程不需要输入你的 Apple ID。装完可以在设置里退出登录，不影响 Sideloadly。
+> - **苹果官网的 iCloud 下载页现在只给 Microsoft Store 链接了**（Apple 自己的支持页面已经不再提供独立安装包），所以上表给的是 Apple CDN 上的官方独立安装包直链 —— 这个地址是 **Sideloadly 官网自己指向的**，不是第三方转载。文件名是 `iCloudSetup.exe`，2020 年的 12.x 版本，正是 Sideloadly 需要的那个。
 
 装完 iTunes 后建议重启一次，确认服务在跑：`Win+R` → `services.msc` → 找到 **Apple Mobile Device Service** → 状态应为"正在运行"。
+
+**怎么判断这三样都就位了？** 插上 iPhone，打开 iTunes 能识别出你的设备（或 Sideloadly 左上角 Device 下拉框里出现你的手机）就说明驱动正常。
 
 ### 2.3 建议：为签名单独注册一个 Apple ID
 
@@ -228,7 +235,9 @@ Sideloadly 0.60+ 也有自动刷新，但要求每次续签时能通过 USB 或 
 | macOS 任务里 `Missing package product 'FlutterGeneratedPluginSwiftPackage'` | Swift Package Manager 没开。workflow 里已有防御步骤，若仍出现就在仓库变量里确认没有干扰配置。 |
 | 签名时报 `A valid provisioning profile ... could not be found` | Bundle ID 被占用了。去仓库 Variables 里把 `BUNDLE_ID` 改成别的（例如加个后缀），重跑流水线。 |
 | Sideloadly 卡 "Connecting to device" | iTunes 残留进程占用 USB。彻底退出 iTunes 再试；换一根**能传数据**的线（不是只充电线）。 |
-| Sideloadly 登录 Apple ID 报错 | 用的是 Microsoft Store 版 iTunes/iCloud。卸载，换官网独立安装包。 |
+| Sideloadly 登录 Apple ID 报错（含提到 `Anisette` / `AOSKit` / `anisette data` 的） | 缺 iCloud 的认证组件。按 2.2 节装 **iCloud 独立安装包**（商店版不行），装完重启再试。 |
+| Sideloadly 登录 Apple ID 报"账号或密码错误"但密码没错 | 该账号开了**高级数据保护**，或需要**专用密码**。去 <https://account.apple.com> 生成一个 App 专用密码，用它代替账号密码。 |
+| Sideloadly 提示 `Maximum number of apps for free development profiles has been reached` | 免费账号每 7 天只能注册 10 个 App ID。删掉几个侧载 App 等一周，或换一个 Apple ID。 |
 | 装完点开提示"未受信任的开发者" | 第 5.3 步没做完。去 `设置 → 通用 → VPN 与设备管理` 信任证书。 |
 | 点开闪退、没有提示 | ① 开发者模式没开；② 签名过期了（第 8 天了）。 |
 | App 里扫描一直 `No PC found` | ① 本地网络权限没给；② PCMonitorHost 没运行，或没开 *Allow LAN pairing*；③ 手机和电脑不在同一网段。 |
