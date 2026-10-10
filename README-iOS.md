@@ -9,6 +9,12 @@
 > （Xcode + iOS SDK），所以这个目录是**可直接在 Mac 上编译的完整工程**，
 > 而不是产物。
 
+> **没有 Mac 也不想买？** 本工程已接入云端编译：GitHub Actions 的免费 macOS
+> 机器产出**未签名 IPA**，再在你的 Windows 机器上用 Sideloadly 配自己的
+> Apple ID（普通免费账号即可）签名并装进 iPhone。完整流程见
+> **[SIGN-AND-INSTALL-WINDOWS.md](SIGN-AND-INSTALL-WINDOWS.md)**。
+> 本节后面的内容是传统的「借一台 Mac」路线，两条路都可行。
+
 ---
 
 ## 1. 目录结构
@@ -234,10 +240,11 @@ Apple 官方文档原话：
    时钟与数字走系统默认字体。这是原工程就有的待办，没有改。
 4. **签名。** 默认用自动签名，Bundle ID 是 `com.pcmonitor.pcmMonitor`。上架前需要
    换成你自己的唯一 ID 并配好 Team。
-5. **没有真实编译验证。** 本机是 Windows，`flutter build ios` 无法运行——工程结构与
-   平台配置是按 Flutter 3.47.7 / Xcode 15 的标准布局生成的（`ios/` 目录由官方脚手架
-   产出），Dart 侧过了真实解析静态分析（`lib/` 0 error / 0 warning / 0 info，与
-   Android 端基线一致），但**首次在 Mac 上的编译仍需实跑确认**。
+5. **iOS 编译尚未实跑。** 本机是 Windows，`flutter build ios` 无法运行。Dart 侧已在
+   本机用 Flutter 3.47.7 / Dart 3.13.5 跑过真实静态分析（`lib/` 与 `test/` 共 30 个
+   文件：**0 error / 0 warning**，21 条 info 级 lint），Dart 依赖也能正常解析；
+   `ios/` 目录由官方脚手架产出、结构完整。但**首次在 macOS 上的编译仍需实跑确认**
+   —— 这一步由 `.github/workflows/ios-unsigned-ipa.yml` 在云端完成。
 
 ---
 
