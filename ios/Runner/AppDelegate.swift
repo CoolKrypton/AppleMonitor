@@ -1,4 +1,5 @@
 import Flutter
+import Network
 import UIKit
 
 /// The UI is entirely Dart-side; mirroring `MainActivity.kt`, the only platform
@@ -24,6 +25,18 @@ import UIKit
   /// needed again.
   private var deviceChannel: FlutterMethodChannel?
 
+  /// A retained, short-lived Bonjour browse used solely to make iOS perform
+  /// its Local Network privacy decision before Dart opens the UDP socket.
+  ///
+  /// `NSLocalNetworkUsageDescription` describes the permission but does not
+  /// itself request it. On some iOS releases a raw BSD UDP socket can be
+  /// silently filtered without causing the prompt to appear. NWBrowser is the
+  /// system-supported trigger for that decision. It does not replace our UDP
+  /// discovery protocol, and the host does not need to publish this service.
+  private var localNetworkPermissionBrowser: NWBrowser?
+  private var didStartLocalNetworkPermissionProbe = false
+  private static let localNetworkServiceType = "_pcmonitor._udp"
+
   override func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
@@ -33,12 +46,49 @@ import UIKit
     // the system whenever the app leaves the foreground, so it is re-asserted
     // on every activation below.
     application.isIdleTimerDisabled = true
-    return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+    let didLaunch = super.application(application, didFinishLaunchingWithOptions: launchOptions)
+    requestLocalNetworkPermission()
+    return didLaunch
   }
 
   override func applicationDidBecomeActive(_ application: UIApplication) {
     application.isIdleTimerDisabled = true
     super.applicationDidBecomeActive(application)
+  }
+
+  /// Starts a system-managed local-network preflight exactly once. A ready
+  /// browser means the permission gate is open; a failed browser means iOS has
+  /// completed the decision (for example, the user denied it). In either case
+  /// it is immediately released, so it has no ongoing network cost and cannot
+  /// alter the application's discovery or pairing behaviour.
+  private func requestLocalNetworkPermission() {
+    guard !didStartLocalNetworkPermissionProbe else { return }
+    didStartLocalNetworkPermissionProbe = true
+
+    let browser = NWBrowser(
+      for: .bonjour(type: AppDelegate.localNetworkServiceType, domain: nil),
+      using: .udp
+    )
+    localNetworkPermissionBrowser = browser
+    browser.stateUpdateHandler = { [weak self] state in
+      switch state {
+      case .ready, .failed(_):
+        browser.cancel()
+        self?.localNetworkPermissionBrowser = nil
+      default:
+        break
+      }
+    }
+    browser.start(queue: .main)
+    // A disconnected phone can remain in `.waiting`; browsing is only a
+    // permission trigger, never a long-running discovery channel.
+    DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+      guard let self, self.localNetworkPermissionBrowser === browser else {
+        return
+      }
+      browser.cancel()
+      self.localNetworkPermissionBrowser = nil
+    }
   }
 
   /// With the `UISceneDelegate` lifecycle the engine is created implicitly, so

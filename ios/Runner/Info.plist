@@ -83,6 +83,16 @@
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>PC Monitor 需要在本地网络中搜索并连接运行 PCMonitorHost 的电脑，以接收实时硬件监控数据。扫描过程只发送本应用自己的发现报文，不会读取网络中的其他内容。</string>
 	<!--
+	  The native permission preflight in AppDelegate uses NWBrowser. Declaring
+	  the service type is required for that browser to trigger iOS's Local
+	  Network decision; the PC host still uses the existing UDP protocol and
+	  does not need to advertise Bonjour.
+	-->
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_pcmonitor._udp</string>
+	</array>
+	<!--
 	  APP TRANSPORT SECURITY.
 	  Flutter's sockets (dart:io) are raw BSD sockets and are not routed through
 	  CFNetwork, so ATS does not apply to the telemetry WebSocket. This exemption

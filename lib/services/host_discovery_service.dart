@@ -693,9 +693,9 @@ class HostDiscoveryService {
     switch (envelope.type) {
       case Proto.lanOffer:
         _offersSeen++;
-        _offer(envelope);
+        _offer(envelope, datagram.address);
       case Proto.discoveryReply:
-        _reply(envelope);
+        _reply(envelope, datagram.address);
       case Proto.pairGrant:
         _grant(envelope, datagram.address);
       default:
@@ -703,9 +703,9 @@ class HostDiscoveryService {
     }
   }
 
-  void _offer(Envelope envelope) {
+  void _offer(Envelope envelope, InternetAddress source) {
     if (envelope.string('product') != Proto.hostProduct) return;
-    final HostEndpoint? endpoint = _endpointOf(envelope);
+    final HostEndpoint? endpoint = _endpointOf(envelope, source);
     if (endpoint == null) return;
     _emit(DiscoveredHost(
       endpoint: endpoint,
@@ -715,9 +715,9 @@ class HostDiscoveryService {
     ));
   }
 
-  void _reply(Envelope envelope) {
+  void _reply(Envelope envelope, InternetAddress source) {
     if (envelope.string('product') != Proto.hostProduct) return;
-    final HostEndpoint? endpoint = _endpointOf(envelope);
+    final HostEndpoint? endpoint = _endpointOf(envelope, source);
     if (endpoint == null) return;
     _emit(DiscoveredHost(
       endpoint: endpoint,
@@ -731,10 +731,10 @@ class HostDiscoveryService {
   void _grant(Envelope envelope, InternetAddress source) {
     final String? hostId = envelope.string('hostId');
     if (!validHostId(hostId)) return;
-    final String? ip = envelope.string('ip');
     final int? port = envelope.integer('webSocketPort');
     final bool approved = envelope.boolean('approved') ?? false;
     final String? secret = envelope.string('pairSecret');
+    final String? address = _reachableAddress(envelope, source);
 
     // Same rule the host applies to itself: a refusal never carries a secret,
     // and an approval must carry exactly 32 bytes of it.
@@ -747,18 +747,14 @@ class HostDiscoveryService {
         endpoint: HostEndpoint(
           hostId: hostId!,
           hostName: envelope.string('hostName') ?? '',
-          ip: (ip != null && _parseIp(ip) != null) ? ip : source.address,
+          ip: address ?? source.address,
           port: (port != null && port > 0 && port <= 65535) ? port : Proto.port,
         ),
         error: envelope.string('error'),
       ));
       return;
     }
-    if (ip == null ||
-        _parseIp(ip) == null ||
-        port == null ||
-        port <= 0 ||
-        port > 65535) {
+    if (address == null || port == null || port <= 0 || port > 65535) {
       return;
     }
     _emitGrant(PairGrant(
@@ -766,25 +762,50 @@ class HostDiscoveryService {
       endpoint: HostEndpoint(
         hostId: hostId!,
         hostName: envelope.string('hostName') ?? '',
-        ip: ip,
+        ip: address,
         port: port,
       ),
       secret: secret,
     ));
   }
 
-  HostEndpoint? _endpointOf(Envelope envelope) {
+  /// Builds an endpoint from a discovery response.
+  ///
+  /// The UDP peer address is authoritative here. Hosts frequently enumerate
+  /// their adapters in a different order from the one that received the probe
+  /// (Hyper-V, VPN and Docker adapters make this especially common on Windows).
+  /// Their advertised `ip` can consequently be loopback, stale or on an
+  /// unreachable interface. Rejecting an offer solely because of that field
+  /// makes a perfectly valid response invisible; using it for the next packet
+  /// makes pairing fail even after the host has appeared. A unicast response's
+  /// source address is the only address proven reachable by this device, so it
+  /// wins whenever it is IPv4. The advertised address remains a fallback for
+  /// test transports that do not expose an IPv4 source.
+  HostEndpoint? _endpointOf(Envelope envelope, InternetAddress source) {
     final String? hostId = envelope.string('hostId');
-    final String? ip = envelope.string('ip');
     final int? port = envelope.integer('webSocketPort');
-    if (!validHostId(hostId) || ip == null || _parseIp(ip) == null) return null;
+    final String? address = _reachableAddress(envelope, source);
+    if (!validHostId(hostId) || address == null) return null;
     if (port == null || port <= 0 || port > 65535) return null;
     return HostEndpoint(
       hostId: hostId!,
       hostName: envelope.string('hostName') ?? '',
-      ip: ip,
+      ip: address,
       port: port,
     );
+  }
+
+  /// Returns the response sender when it is an IPv4 address; see
+  /// [_endpointOf] for why this deliberately outranks `payload.ip`.
+  String? _reachableAddress(Envelope envelope, InternetAddress source) {
+    if (source.type == InternetAddressType.IPv4 &&
+        _parseIp(source.address) != null) {
+      return source.address;
+    }
+    final String? advertised = envelope.string('ip');
+    return advertised != null && _parseIp(advertised) != null
+        ? advertised
+        : null;
   }
 
   void _emit(DiscoveredHost host) {
