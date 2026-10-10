@@ -22,12 +22,12 @@
 /// device <--unicast  discovery.reply----  host   only ever answers its own device
 /// ```
 ///
-/// **iOS note.** Apple documents the multicast entitlement as a requirement for
-/// sending to a broadcast address, so on iOS every probe is *also* repeated as
-/// plain unicast across the local `/24`s - a host answers a unicast probe
-/// exactly as it answers a broadcast one. Both are attempted, and neither is
-/// allowed to cancel the other; see [_sweepLocalSubnet] and [probeOnce]. The
-/// protocol on the wire is unchanged: only the destination addresses differ.
+/// **iOS note.** Apple requires a multicast entitlement to send or receive UDP
+/// broadcast. This app deliberately does not request that restricted
+/// entitlement, so iOS sends probes *only* as plain unicast across local
+/// `/24`s. A host answers a unicast probe exactly as it answers a broadcast
+/// one. Android keeps its broadcast fast path; the discovery protocol itself
+/// is unchanged.
 library;
 
 import 'dart:async';
@@ -271,16 +271,17 @@ class HostDiscoveryService {
     );
   }
 
-  /// Binds the socket, and turns on broadcast - which
-  /// `send(..., 255.255.255.255, ...)` needs before the OS lets it leave.
+  /// Binds the socket. Only non-iOS builds enable broadcast: iOS requires an
+  /// Apple-granted multicast entitlement even for UDP broadcast, while the
+  /// unicast sweep needs neither that entitlement nor this socket option.
   Future<RawDatagramSocket> _open(InternetAddress address) async {
     final RawDatagramSocket socket = await RawDatagramSocket.bind(address, 0);
+    if (Platform.isIOS) return socket;
     try {
       socket.broadcastEnabled = true;
     } catch (_) {
-      // A socket that cannot broadcast is still worth having: on iOS the
-      // unicast sweep is the phase that carries discovery anyway, and the
-      // refusals show up in the report's `err` count.
+      // A socket that cannot broadcast is still worth having. The remembered
+      // address (and iOS's unicast sweep) can still discover a host.
     }
     return socket;
   }
@@ -396,7 +397,11 @@ class HostDiscoveryService {
     final List<InternetAddress> reachable =
         pinned ? <InternetAddress>[bound] : locals;
     _sweepTargets = _sweepFrom(reachable);
-    _broadcastTargets = _broadcastFrom(reachable);
+    // See the iOS-only guard below: keeping this list empty makes the report
+    // accurately show that no prohibited broadcast targets were attempted.
+    _broadcastTargets = Platform.isIOS
+        ? const <InternetAddress>[]
+        : _broadcastFrom(reachable);
 
     // The remembered host goes out early: on a reconnect that direct unicast is
     // both the likeliest to be delivered and the fastest.
@@ -412,7 +417,14 @@ class HostDiscoveryService {
     if (remembered != null) {
       await _phase(socket, <InternetAddress>[remembered], datagrams);
     }
-    await _phase(socket, _broadcastTargets, datagrams);
+    // iOS must not send any UDP broadcast without Apple's multicast
+    // entitlement. `send()` can report success while iOS silently discards
+    // those packets, which is precisely the misleading tx>0/rx=0 state this
+    // transport is designed to avoid. Its unicast sweep above is the complete
+    // first-pairing discovery path instead.
+    if (!Platform.isIOS) {
+      await _phase(socket, _broadcastTargets, datagrams);
+    }
   }
 
   /// Sends [datagrams] to every address in [targets], tolerating everything.

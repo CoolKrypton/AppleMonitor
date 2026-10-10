@@ -46,14 +46,16 @@ import UIKit
     // the system whenever the app leaves the foreground, so it is re-asserted
     // on every activation below.
     application.isIdleTimerDisabled = true
-    let didLaunch = super.application(application, didFinishLaunchingWithOptions: launchOptions)
-    requestLocalNetworkPermission()
-    return didLaunch
+    return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 
   override func applicationDidBecomeActive(_ application: UIApplication) {
     application.isIdleTimerDisabled = true
     super.applicationDidBecomeActive(application)
+    // iOS denies an undetermined local-network request made in the background
+    // without displaying its alert. This lifecycle callback is the first
+    // foreground-safe point at which to ask.
+    requestLocalNetworkPermission()
   }
 
   /// Starts a system-managed local-network preflight exactly once. A ready
