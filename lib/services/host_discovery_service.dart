@@ -103,6 +103,7 @@ class DiscoveryReport {
     required this.socketError,
     required this.interfaces,
     required this.locals,
+    required this.bound,
     required this.usedFallback,
     required this.sweepTargets,
     required this.broadcastTargets,
@@ -120,6 +121,10 @@ class DiscoveryReport {
 
   /// The private ones the sweep and the broadcast guesses were built from.
   final List<String> locals;
+
+  /// The address the socket was bound to. `0.0.0.0` means the system chose the
+  /// source address, which is the state this whole report exists to catch.
+  final String bound;
 
   /// True when those addresses had to come from the TCP-connect fallback.
   final bool usedFallback;
@@ -139,6 +144,7 @@ class DiscoveryReport {
   String get summary {
     final StringBuffer buffer = StringBuffer()
       ..writeln(socketError == null ? 'socket: bound' : 'socket: $socketError')
+      ..writeln('bound: $bound')
       ..writeln(
         'interfaces: ${interfaces.isEmpty ? 'none' : interfaces.join(' ')}',
       )
@@ -153,10 +159,27 @@ class DiscoveryReport {
   }
 
   /// The same facts on one line, sized for the two-line status caption.
+  ///
+  /// Ordered by how much each field is worth: the send/receive counters, then
+  /// what the socket was bound to and which interfaces exist, then the target
+  /// counts. A caption that gets clipped still keeps the part that tells a
+  /// refused send from a swallowed one.
   String get compact =>
       'tx=$sent err=$refused rx=$received offer=$offers '
+      '| bind=$bound if=$interfaceNames '
       '| swp=$sweepTargets bc=$broadcastTargets '
       '| loc=${locals.isEmpty ? 'none' : locals.join(',')}';
+
+  /// Interface names only - the part of [interfaces] that identifies a tunnel
+  /// or a cellular slot without the addresses.
+  String get interfaceNames {
+    final Set<String> names = <String>{};
+    for (final String entry in interfaces) {
+      final int colon = entry.indexOf(':');
+      names.add(colon < 0 ? entry : entry.substring(0, colon));
+    }
+    return names.isEmpty ? 'none' : names.join(' ');
+  }
 }
 
 class HostDiscoveryService {
@@ -167,6 +190,12 @@ class HostDiscoveryService {
   final int discoveryPort;
 
   RawDatagramSocket? _socket;
+
+  /// Where [_socket] was bound. `null` means `anyIPv4`, i.e. the system picked
+  /// the source address itself - which is exactly the ambiguity iOS needs to be
+  /// kept out of. Reported, because the choice is invisible otherwise.
+  InternetAddress? _boundTo;
+
   StreamSubscription<RawSocketEvent>? _subscription;
   final StreamController<DiscoveredHost> _hosts =
       StreamController<DiscoveredHost>.broadcast();
@@ -200,31 +229,107 @@ class HostDiscoveryService {
   int? get port => _socket?.port;
 
   Future<void> start() async {
-    if (_socket != null) return;
+    final InternetAddress? preferred = await _preferredBindAddress();
+    final InternetAddress target = preferred ?? InternetAddress.anyIPv4;
+
+    // Re-evaluated on every call rather than latched once: the Wi-Fi address
+    // changes with the network, and a socket left bound to one that is gone
+    // swallows everything it is given without an error.
+    if (_socket != null && _boundTo?.address == target.address) return;
+    if (_socket != null) await stop();
+
     try {
-      final RawDatagramSocket socket =
-          await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
-      // Required before `send(..., 255.255.255.255, ...)` is allowed to leave.
-      socket.broadcastEnabled = true;
-      _socket = socket;
+      _socket = await _open(target);
+      _boundTo = target;
       _socketError = null;
-      _subscription = socket.listen(
-        _onEvent,
-        onError: (Object error) {},
-        cancelOnError: false,
-      );
-    } on SocketException catch (error) {
-      // Swallowed before, which left every later send a silent no-op. The
-      // reason is kept so the connect screen can say so.
-      _socketError = error.osError?.message ?? error.message;
+    } catch (error) {
+      if (target.address == InternetAddress.anyIPv4.address) {
+        _socket = null;
+        _boundTo = null;
+        _socketError = _describe(error);
+      } else {
+        // Losing discovery entirely would be worse than whatever the system
+        // picks, so fall back to the unbound socket and say so in the report.
+        try {
+          _socket = await _open(InternetAddress.anyIPv4);
+          _boundTo = InternetAddress.anyIPv4;
+          _socketError = 'bind ${target.address}: ${_describe(error)}';
+        } catch (fallback) {
+          _socket = null;
+          _boundTo = null;
+          _socketError = _describe(fallback);
+        }
+      }
     }
+
+    final RawDatagramSocket? socket = _socket;
+    if (socket == null) return;
+    _subscription = socket.listen(
+      _onEvent,
+      onError: (Object error) {},
+      cancelOnError: false,
+    );
   }
+
+  /// Binds the socket, and turns on broadcast - which
+  /// `send(..., 255.255.255.255, ...)` needs before the OS lets it leave.
+  Future<RawDatagramSocket> _open(InternetAddress address) async {
+    final RawDatagramSocket socket = await RawDatagramSocket.bind(address, 0);
+    try {
+      socket.broadcastEnabled = true;
+    } catch (_) {
+      // A socket that cannot broadcast is still worth having: on iOS the
+      // unicast sweep is the phase that carries discovery anyway, and the
+      // refusals show up in the report's `err` count.
+    }
+    return socket;
+  }
+
+  /// The address the discovery socket should send *from*, or `null` to let the
+  /// system choose.
+  ///
+  /// Only iOS answers with anything but `null`. Its interface list mixes Wi-Fi,
+  /// a cellular slot and one tunnel per VPN or relay, all of them carrying
+  /// private addresses, and a socket on `anyIPv4` gets its source address and
+  /// its route picked by the system rather than by us. When that choice lands
+  /// on an interface that cannot reach the LAN the datagrams are accepted by
+  /// `send()` and then dropped without a trace - the counters show a clean
+  /// send, the PC sees nothing, and there is no evidence anywhere to say why.
+  /// The interface whose name starts with `en` is the Wi-Fi one; binding to it
+  /// takes the decision away from the system.
+  ///
+  /// Android reports a single `wlan0` and has no equivalent ambiguity, so it
+  /// keeps the unbound socket and its traffic profile is untouched.
+  Future<InternetAddress?> _preferredBindAddress() async {
+    if (!Platform.isIOS) return null;
+    try {
+      final List<NetworkInterface> list = await NetworkInterface.list(
+        type: InternetAddressType.IPv4,
+        includeLoopback: false,
+        includeLinkLocal: false,
+      );
+      for (final NetworkInterface interface in list) {
+        if (!interface.name.startsWith('en')) continue;
+        for (final InternetAddress address in interface.addresses) {
+          if (_isPrivateIpv4(address.address)) return address;
+        }
+      }
+    } catch (_) {
+      // No interface list: `anyIPv4` is the answer, and the report shows it.
+    }
+    return null;
+  }
+
+  static String _describe(Object error) => error is SocketException
+      ? (error.osError?.message ?? error.message)
+      : '$error';
 
   Future<void> stop() async {
     await _subscription?.cancel();
     _subscription = null;
     _socket?.close();
     _socket = null;
+    _boundTo = null;
   }
 
   Future<void> dispose() async {
@@ -280,8 +385,18 @@ class HostDiscoveryService {
 
     final List<InternetAddress> locals = await _localAddresses();
     _locals = locals;
-    _sweepTargets = _sweepFrom(locals);
-    _broadcastTargets = _broadcastFrom(locals);
+
+    // A socket bound to one address can only send from it, so the subnet of any
+    // *other* interface is unreachable by definition. Walking it would burn 253
+    // datagrams per round, and on iOS it hands the system a chance to send the
+    // whole round out an interface the LAN cannot be reached from - which is
+    // how a scan ends up reporting thousands of clean sends and zero arrivals.
+    final InternetAddress? bound = _boundTo;
+    final bool pinned = bound != null && bound.address != '0.0.0.0';
+    final List<InternetAddress> reachable =
+        pinned ? <InternetAddress>[bound] : locals;
+    _sweepTargets = _sweepFrom(reachable);
+    _broadcastTargets = _broadcastFrom(reachable);
 
     // The remembered host goes out early: on a reconnect that direct unicast is
     // both the likeliest to be delivered and the fastest.
@@ -347,6 +462,7 @@ class HostDiscoveryService {
     socketError: _socketError,
     interfaces: _interfaces,
     locals: _locals.map((InternetAddress a) => a.address).toList(growable: false),
+    bound: _boundTo?.address ?? InternetAddress.anyIPv4.address,
     usedFallback: _usedProbeFallback,
     sweepTargets: _sweepTargets.length,
     broadcastTargets: _broadcastTargets.length,
@@ -383,10 +499,10 @@ class HostDiscoveryService {
   /// The private IPv4 addresses of this device, one per usable interface.
   ///
   /// iOS hands out several - Wi-Fi, a cellular slot and one `utun` per VPN - and
-  /// the sweep has to be built per subnet, so every private address is kept and
-  /// everything else dropped. Note that this makes a VPN's own subnet part of
-  /// the sweep: harmless (nothing answers there) but it is why the report can
-  /// show more than one address.
+  /// the sweep is built per subnet, so every private address is kept and
+  /// everything else dropped. Which of them the sweep actually walks is decided
+  /// in [probeOnce]: only the interface the socket is bound to, because no
+  /// other subnet is reachable from that source address anyway.
   ///
   /// The address is read from its dotted string rather than from `rawAddress`:
   /// a platform that reports a widened or mapped representation would make
