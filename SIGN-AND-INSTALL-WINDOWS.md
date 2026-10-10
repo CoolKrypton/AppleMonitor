@@ -121,8 +121,15 @@ git push -u origin main
    - `Dart analyze + test`（Linux，**不计费**）—— 这一关不过，后面的 macOS 根本不会启动
    - `Flutter iOS release -> unsigned IPA`（macOS，**计费**）
 3. 等它变成绿色 ✅（首次约 8–12 分钟，之后有缓存会快些）
-4. 点进这次运行，页面底部 **Artifacts** 框里点 `PCMonitor-unsigned-2026.10.10-9`
-5. 下载得到一个 zip，解压后是 **`PCMonitor-unsigned-2026.10.10-9.ipa`**
+4. 点进这次运行，页面底部 **Artifacts** 框里点 `PCMonitor-unsigned-<日期>-<构建号>`
+   （名字每次都会变，形如 `PCMonitor-unsigned-2026.10.10-9`）
+5. 下载得到一个 zip，解压后就是那个 `.ipa`
+
+> **用命令行更快**（装了 gh 的话，一条命令就行，不用点网页）：
+> ```powershell
+> gh run download --dir dist            # 下载最近一次成功构建的产物
+> ```
+> 产物会落在 `dist/PCMonitor-unsigned-<日期>-<构建号>/` 里。
 
 > Artifacts 必须登录 GitHub 才能下载（私有仓库的必然结果）。文件 30 天后自动清理，过期就重跑一次流水线。
 
@@ -165,6 +172,15 @@ git push -u origin main
 13. 会弹 **"允许 PC Monitor 查找并连接本地网络上的设备？"** —— **必须允许**。
     这是 iOS 14 起的强制隐私门，拒绝的话所有探测包会被系统静默丢弃，扫描会一直显示 `No PC found`。
     事后想改：`设置 → 隐私与安全性 → 本地网络 → PC Monitor`。
+
+> **为什么免费账号也能扫到 PC？** iOS 往上位广播地址（`255.255.255.255`）发包需要苹果的
+> `com.apple.developer.networking.multicast` 权限，这个权限免费账号拿不到。所以本工程在 iOS 上
+> 会自动改用**单播**：除了广播，还会对本地网段的每个地址逐个发一遍探测包
+> （`lib/services/host_discovery_service.dart` 的 `_sweepLocalSubnet`）。PC 对单播探测的回应
+> 和广播完全一样，功能不受影响 —— 代价只是首次扫描会多花一两秒。
+> Android 和 ESP32 没有这个限制，走的仍是原来的广播。
+>
+> **前提：手机和电脑必须在同一个 Wi-Fi / 网段。**
 
 到这一步 App 就装好了。
 

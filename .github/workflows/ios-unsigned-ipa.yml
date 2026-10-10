@@ -35,6 +35,8 @@ on:
       - "**.md"
       - "preview/**"
       - ".workbuddy/**"
+      - ".gitignore"
+      - "LICENSE"
 
 # A second push while a build is running cancels the first one instead of
 # queueing a duplicate that spends more macOS minutes.
