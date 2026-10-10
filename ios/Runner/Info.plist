@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<!-- Matches the Android manifest's android:label="PC Monitor". -->
+	<key>CFBundleDisplayName</key>
+	<string>PC Monitor</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>pcm_monitor</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(FLUTTER_BUILD_NAME)</string>
+	<key>CFBundleSignature</key>
+	<string>????</string>
+	<key>CFBundleVersion</key>
+	<string>$(FLUTTER_BUILD_NUMBER)</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+		<key>UISceneConfigurations</key>
+		<dict>
+			<key>UIWindowSceneSessionRoleApplication</key>
+			<array>
+				<dict>
+					<key>UISceneClassName</key>
+					<string>UIWindowScene</string>
+					<key>UISceneConfigurationName</key>
+					<string>flutter</string>
+					<key>UISceneDelegateClassName</key>
+					<string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
+					<key>UISceneStoryboardFile</key>
+					<string>Main</string>
+				</dict>
+			</array>
+		</dict>
+	</dict>
+	<key>UIApplicationSupportsIndirectInputEvents</key>
+	<true/>
+	<key>UILaunchStoryboardName</key>
+	<string>LaunchScreen</string>
+	<key>UIMainStoryboardFile</key>
+	<string>Main</string>
+	<!--
+	  The responsive layout engine is orientation-aware by design, exactly like
+	  the Android side, which declares an exhaustive `configChanges` set so a
+	  rotation re-lays-out instead of restarting. Flutter never recreates the
+	  engine on rotation, so listing all three phone orientations here gives the
+	  same behaviour.
+	-->
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<!--
+	  LOCAL NETWORK (iOS 14+).
+	  Discovery probes the LAN over UDP, which iOS gates behind a user prompt;
+	  without this key the prompt can never be shown and every probe is silently
+	  dropped. The text is what the user reads, so it states the purpose plainly.
+	-->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>PC Monitor 需要在本地网络中搜索并连接运行 PCMonitorHost 的电脑，以接收实时硬件监控数据。扫描过程只发送本应用自己的发现报文，不会读取网络中的其他内容。</string>
+	<!--
+	  APP TRANSPORT SECURITY.
+	  Flutter's sockets (dart:io) are raw BSD sockets and are not routed through
+	  CFNetwork, so ATS does not apply to the telemetry WebSocket. This exemption
+	  is declared anyway, and scoped to local networking only, so any future
+	  NSURLSession-based component can also reach a host on a private address
+	  without forcing `NSAllowsArbitraryLoads` into the app. It neither weakens
+	  TLS for public traffic nor appears as a review flag.
+	-->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<!--
+	  The only cryptography in the app is SHA-256 / HMAC-SHA-256 for the pairing
+	  proof, which is exempt from export documentation. Declaring it here means
+	  App Store Connect never asks the question on upload.
+	-->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+</dict>
+</plist>

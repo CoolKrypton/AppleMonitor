@@ -1,0 +1,47 @@
+# Flutter/Dart/Pub related
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+build/
+pubspec.lock
+
+# Android - kept only because this tree is a sibling of AndroidMonitor and the
+# shared tooling may touch it; nothing here builds Android.
+android/.gradle/
+android/captures/
+android/local.properties
+android/key.properties
+*.jks
+*.keystore
+.cxx/
+
+# iOS
+ios/Pods/
+ios/.symlinks/
+ios/Flutter/ephemeral/
+ios/Flutter/Generated.xcconfig
+ios/Flutter/flutter_export_environment.sh
+ios/Flutter/App.framework
+ios/Flutter/Flutter.framework
+ios/Flutter/Flutter.podspec
+ios/Runner/GeneratedPluginRegistrant.*
+ios/ServiceDefinitions.json
+xcuserdata/
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+DerivedData/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+*.log
+
+# Local agent / tooling scratch space (memory, temp scripts, captures).
+# Not part of the build, never belongs in the repo.
+.workbuddy/
+
+# OS
+.DS_Store
+Thumbs.db

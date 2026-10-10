@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  ============================================================================
+  RUNNER ENTITLEMENTS - NOT WIRED UP BY DEFAULT. READ THIS FIRST.
+  ============================================================================
+
+  This file exists for one reason: on iOS 14 and later, sending to a broadcast
+  or multicast address requires the entitlement below, and Apple grants it per
+  app on request. See:
+
+      https://developer.apple.com/contact/request/networking-multicast
+
+  Apple's wording: "Your app must have this entitlement to send or receive IP
+  multicast or broadcast on iOS. This entitlement requires permission from Apple
+  before you can use it in your app."
+
+  It is deliberately NOT referenced by CODE_SIGN_ENTITLEMENTS in
+  Runner.xcodeproj, because a build signed with an entitlement that the
+  provisioning profile does not carry **fails at signing time**. Adding it to
+  the project before Apple has approved it would break `flutter run` on device
+  for no benefit.
+
+  The app does not depend on it. `HostDiscoveryService` probes the LAN with
+  plain unicast on iOS (see `_sweepLocalSubnet` in
+  lib/services/host_discovery_service.dart), which needs no entitlement at all.
+  Broadcast remains the fast path on Android and on the ESP32 firmware.
+
+  Only add this entitlement once BOTH are true:
+    1. Apple has granted it for this App ID, and
+    2. the provisioning profile in use includes it.
+  Then set, for the Runner target in Xcode:
+      Code Signing Entitlements = Runner/Runner.entitlements
+  ============================================================================
+-->
+<plist version="1.0">
+<dict>
+	<key>com.apple.developer.networking.multicast</key>
+	<true/>
+</dict>
+</plist>

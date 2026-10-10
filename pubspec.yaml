@@ -1,0 +1,56 @@
+name: pcm_monitor
+description: PC Monitor - iOS client for the PCMonitorHost telemetry agent.
+publish_to: "none"
+
+# Version format: <host-protocol-ish year>.<month>.<day> + build number.
+version: 2026.10.10+9
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Text rendering for the clock / numeric readouts.
+  intl: ^0.19.0
+
+  # Persists the pairing secret and the device identity across restarts.
+  # Everything else - the protocol, SHA-256/HMAC and the sockets - is in-tree.
+  shared_preferences: ^2.3.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+
+  # NOTE: do not leave a bare `fonts:` key here. An empty/null `fonts` value is
+  # a hard error for the pubspec parser ("Expected "fonts" to be a list, but got
+  # null"), which aborts every `pub get` / `flutter build` before it starts.
+  # The block below is therefore fully commented out; uncomment the whole
+  # `fonts:` tree once the TTFs actually exist.
+  #
+  # Bundled so the futuristic look survives on every device. The files are
+  # intentionally NOT committed as binaries - see assets/fonts/README.md.
+  # Drop Orbitron/Rajdhani TTFs in and uncomment to enable the display face.
+  #
+    # - family: Orbitron
+    #   fonts:
+    #     - asset: assets/fonts/Orbitron-Regular.ttf
+    #     - asset: assets/fonts/Orbitron-SemiBold.ttf
+    #       weight: 600
+    #     - asset: assets/fonts/Orbitron-Bold.ttf
+    #       weight: 700
+    #
+    # - family: Rajdhani
+    #   fonts:
+    #     - asset: assets/fonts/Rajdhani-Medium.ttf
+    #       weight: 500
+    #     - asset: assets/fonts/Rajdhani-SemiBold.ttf
+    #       weight: 600
+
+  assets:
+    - assets/fonts/

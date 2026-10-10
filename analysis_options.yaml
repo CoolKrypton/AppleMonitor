@@ -1,0 +1,16 @@
+include: package:flutter_lints/flutter.yaml
+
+linter:
+  rules:
+    prefer_final_locals: true
+    avoid_print: false
+
+analyzer:
+  errors:
+    # The UI deliberately renders placeholder text for missing sensors, so a
+    # few "unused" diagnostics around preview-only helpers are fine.
+    unused_element: info
+  exclude:
+    - build/**
+    - android/**
+    - ios/**

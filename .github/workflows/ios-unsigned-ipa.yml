@@ -1,0 +1,236 @@
+# ---------------------------------------------------------------------------
+# Cloud build for the iOS client -> unsigned .ipa
+#
+# WHY THIS EXISTS
+#   The iOS toolchain (Xcode + the iOS SDK) only runs on macOS, and this
+#   project is developed on Windows. A GitHub-hosted macOS runner is the free
+#   way to get the one thing Windows cannot produce: a compiled Runner.app.
+#
+# WHAT IT PRODUCES
+#   An UNSIGNED .ipa (Payload/Runner.app zipped the Apple way).
+#   Signing deliberately does NOT happen here. A free Apple Account signs
+#   through Apple's interactive Apple-ID + 2FA flow, which has to run on a
+#   machine you control, with your credentials, using a tool that only exists
+#   for Windows/macOS (Sideloadly). See SIGN-AND-INSTALL-WINDOWS.md.
+#
+# COST
+#   Public repo  -> macOS runner minutes are free and unlimited.
+#   Private repo -> macOS minutes count 10x against the monthly allowance.
+#   That is why the Dart gate below runs on ubuntu (1x): a broken build is
+#   caught there and never reaches the metered job.
+# ---------------------------------------------------------------------------
+name: Build unsigned iOS IPA
+
+on:
+  workflow_dispatch:
+    inputs:
+      bundle_id:
+        description: "Bundle ID override. Leave empty to derive one from the repo owner."
+        required: false
+        type: string
+        default: ""
+  push:
+    branches: [main, master]
+    paths-ignore:
+      - "**.md"
+      - "preview/**"
+      - ".workbuddy/**"
+
+# A second push while a build is running cancels the first one instead of
+# queueing a duplicate that spends more macOS minutes.
+concurrency:
+  group: ios-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FLUTTER_VERSION: "3.47.7"
+
+jobs:
+  # -------------------------------------------------------------------------
+  # Gate 1 - runs on Linux, costs nothing. Catches Dart errors, analyzer
+  # findings and test failures before a single macOS minute is spent.
+  # -------------------------------------------------------------------------
+  dart-gate:
+    name: Dart analyze + test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Versions
+        run: flutter --version && dart --version
+
+      - name: flutter pub get
+        run: flutter pub get
+
+      - name: flutter analyze
+        run: flutter analyze
+
+      - name: flutter test
+        run: flutter test
+
+  # -------------------------------------------------------------------------
+  # Gate 2 - the real thing. macOS only, metered on private repos.
+  # -------------------------------------------------------------------------
+  ios-ipa:
+    name: Flutter iOS release -> unsigned IPA
+    needs: dart-gate
+    # Pin this if `macos-latest` ever moves to an Xcode Flutter 3.47 dislikes,
+    # e.g. runs-on: macos-15
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Toolchain versions
+        run: |
+          set -x
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          pod --version || true
+          flutter --version
+
+      # ---------------------------------------------------------------------
+      # Bundle ID.
+      #
+      # A free Apple Account can only register App IDs that are unique across
+      # all of Apple's developer ecosystem, so the template placeholder
+      # (com.pcmonitor.pcmMonitor) is a liability. Precedence:
+      #   1. the workflow_dispatch input
+      #   2. a repo variable named BUNDLE_ID (Settings -> Variables)
+      #   3. com.<repo-owner>.pcmmonitor, sanitised to [a-z0-9-]
+      # ---------------------------------------------------------------------
+      - name: Resolve bundle id
+        id: bid
+        run: |
+          set -euo pipefail
+          raw="${{ inputs.bundle_id }}"
+          if [ -z "$raw" ]; then raw="${{ vars.BUNDLE_ID }}"; fi
+          if [ -z "$raw" ]; then
+            owner="$(printf '%s' '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9-')"
+            if [ -z "$owner" ]; then owner="pcmmonitor"; fi
+            raw="com.${owner}.pcmmonitor"
+          fi
+          echo "value=$raw" >> "$GITHUB_OUTPUT"
+          echo "Bundle ID for this build: $raw"
+
+      - name: Patch bundle id into the Xcode project
+        env:
+          BUNDLE_ID: ${{ steps.bid.outputs.value }}
+        run: |
+          set -euo pipefail
+          PBX=ios/Runner.xcodeproj/project.pbxproj
+          before=$(grep -c 'com\.pcmonitor\.pcmMonitor' "$PBX" || true)
+          echo "placeholder occurrences before: $before"
+          if [ "$before" -eq 0 ]; then
+            echo "::error::placeholder bundle id not found in $PBX - the Xcode project changed"
+            exit 1
+          fi
+          sed -i '' "s/com\.pcmonitor\.pcmMonitor/${BUNDLE_ID}/g" "$PBX"
+          after=$(grep -c 'com\.pcmonitor\.pcmMonitor' "$PBX" || true)
+          if [ "$after" -ne 0 ]; then
+            echo "::error::$after occurrence(s) survived the substitution"
+            exit 1
+          fi
+          grep -n 'PRODUCT_BUNDLE_IDENTIFIER' "$PBX"
+
+      # ---------------------------------------------------------------------
+      # The Xcode project is the SPM-era Flutter template: it references the
+      # generated local package
+      # Flutter/ephemeral/Packages/FlutterGeneratedPluginSwiftPackage.
+      # If Swift Package Manager is switched off, `flutter pub get` never
+      # writes that directory and Xcode fails with
+      # "Missing package product 'FlutterGeneratedPluginSwiftPackage'".
+      # On Flutter 3.47 this is already the default, so the command is a
+      # no-op - it is here purely so the failure mode cannot happen.
+      # ---------------------------------------------------------------------
+      - name: Ensure Swift Package Manager is enabled
+        run: flutter config --enable-swift-package-manager || true
+
+      - name: flutter pub get
+        run: flutter pub get
+
+      - name: pod install
+        run: |
+          cd ios
+          pod install
+
+      - name: flutter build ios --release --no-codesign
+        run: flutter build ios --release --no-codesign
+
+      - name: Package the unsigned IPA
+        id: package
+        run: |
+          set -euo pipefail
+          APP=build/ios/iphoneos/Runner.app
+          if [ ! -d "$APP" ]; then
+            echo "::error::$APP was not produced"
+            exit 1
+          fi
+
+          VERSION=$(awk '/^version:/{print $2; exit}' pubspec.yaml | tr '+' '-')
+          NAME="PCMonitor-unsigned-${VERSION}"
+
+          rm -rf build/ipa
+          mkdir -p build/ipa/Payload
+          cp -R "$APP" build/ipa/Payload/
+
+          # ditto is what Apple ships for this: it keeps symlinks and resource
+          # forks intact, which `zip` does not.
+          ditto -c -k --sequesterRsrc --keepParent build/ipa/Payload "build/${NAME}.ipa"
+
+          PLIST="$APP/Info.plist"
+          BID=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$PLIST")
+          echo "bundle id : $BID"
+          echo "version   : $(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PLIST") ($(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$PLIST"))"
+          echo "minios    : $(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$PLIST" 2>/dev/null || echo 'see build settings')"
+          ls -lh "build/${NAME}.ipa"
+          shasum -a 256 "build/${NAME}.ipa" | tee build/ipa/sha256.txt
+          unzip -l "build/${NAME}.ipa" | head -20
+
+          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
+          echo "ipa=build/${NAME}.ipa" >> "$GITHUB_OUTPUT"
+          echo "sha=$(cut -d' ' -f1 build/ipa/sha256.txt)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the IPA
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.package.outputs.name }}
+          path: ${{ steps.package.outputs.ipa }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Next steps
+        if: success()
+        run: |
+          {
+            echo "## Unsigned IPA is ready"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Artifact | \`${{ steps.package.outputs.name }}\` (download it from the **Artifacts** box on this run's summary page) |"
+            echo "| Bundle ID | \`${{ steps.bid.outputs.value }}\` |"
+            echo "| SHA-256 | \`${{ steps.package.outputs.sha }}\` |"
+            echo "| Flutter | \`${{ env.FLUTTER_VERSION }}\` |"
+            echo ""
+            echo "This file is **unsigned on purpose** - GitHub cannot touch your Apple Account."
+            echo "Sign and install it on Windows with Sideloadly; the full walkthrough is in"
+            echo "\`SIGN-AND-INSTALL-WINDOWS.md\`."
+            echo ""
+            echo "Reminder: a free Apple Account makes the signature valid for **7 days**."
+          } >> "$GITHUB_STEP_SUMMARY"

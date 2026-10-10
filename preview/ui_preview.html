@@ -1,0 +1,2161 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PC Monitor — Flutter UI 交互原型</title>
+<style>
+  :root{
+    --bg:#0a0d13; --fg:#e7edf5; --dim:#7b8798; --line:#20293a;
+    --accent:#4cc9ff; --panel:#111722;
+    --ui:"Segoe UI","PingFang SC","Microsoft YaHei",system-ui,-apple-system,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:radial-gradient(1200px 700px at 15% -10%,#16203a 0%,transparent 60%),var(--bg);
+    color:var(--fg); font-family:var(--ui); font-size:13px; overflow:hidden;
+    -webkit-font-smoothing:antialiased;
+  }
+  #app{display:flex; flex-direction:column; height:100vh}
+
+  /* ---------------- toolbar ---------------- */
+  #topbar{
+    display:flex; align-items:center; gap:18px; flex-wrap:wrap;
+    padding:10px 16px; border-bottom:1px solid var(--line);
+    background:linear-gradient(180deg,rgba(20,28,44,.92),rgba(12,17,26,.92));
+    backdrop-filter:blur(6px);
+  }
+  .brand{display:flex;align-items:center;gap:9px;font-weight:700;letter-spacing:1.4px;font-size:12px;text-transform:uppercase}
+  .brand i{width:4px;height:18px;background:var(--accent);border-radius:1px;box-shadow:0 0 10px var(--accent);display:block}
+  .brand small{display:block;font-weight:500;letter-spacing:.6px;color:var(--dim);font-size:10px;text-transform:none}
+  .grp{display:flex;align-items:center;gap:6px}
+  .grp>label{color:var(--dim);font-size:11px;letter-spacing:.5px;margin-right:2px}
+  .btn{
+    background:#141c2a; color:#c8d4e4; border:1px solid #263349; border-radius:5px;
+    padding:5px 9px; font-size:11px; cursor:pointer; font-family:inherit; letter-spacing:.3px;
+    transition:.14s; white-space:nowrap;
+  }
+  .btn:hover{background:#1b2740;border-color:#3a5070;color:#fff}
+  .btn.on{background:#123048;border-color:var(--accent);color:#dff3ff;box-shadow:0 0 0 1px rgba(76,201,255,.25) inset}
+  .btn.tone{min-width:26px;height:24px;padding:0;border-radius:4px}
+  input[type=number]{
+    width:66px;background:#0d131e;border:1px solid #263349;color:#dbe6f2;border-radius:5px;
+    padding:5px 7px;font-size:11px;font-family:inherit;
+  }
+  .chk{display:flex;align-items:center;gap:5px;color:var(--dim);font-size:11px;cursor:pointer;user-select:none}
+  .chk input{accent-color:var(--accent);cursor:pointer}
+  select{
+    background:#0d131e;border:1px solid #263349;color:#dbe6f2;border-radius:5px;
+    padding:5px 7px;font-size:11px;font-family:inherit;cursor:pointer;
+  }
+  .spacer{flex:1}
+
+  /* ---------------- stage ---------------- */
+  #main{flex:1; display:flex; min-height:0}
+  #stage{
+    flex:1; min-width:0; position:relative; overflow:auto;
+    display:flex; align-items:center; justify-content:center; padding:22px;
+    background-image:
+      linear-gradient(to right,rgba(255,255,255,.028) 1px,transparent 1px),
+      linear-gradient(to bottom,rgba(255,255,255,.028) 1px,transparent 1px);
+    background-size:28px 28px;
+  }
+  #fitwrap{transform-origin:center center}
+  #bezel{
+    padding:11px; border-radius:26px;
+    background:linear-gradient(160deg,#2a3446,#141a25 55%,#0d1219);
+    box-shadow:0 30px 70px rgba(0,0,0,.62), 0 0 0 1px rgba(255,255,255,.05) inset;
+  }
+  #device{
+    position:relative; overflow:hidden; border-radius:16px; background:#0B1017;
+    font-variant-numeric:tabular-nums;
+  }
+  #device *{-webkit-font-smoothing:antialiased}
+
+  /* background motif layers */
+  .motif{position:absolute;inset:0;pointer-events:none}
+  .scan{position:absolute;inset:0;pointer-events:none}
+  .bloom{position:absolute;inset:0;pointer-events:none}
+  .screenroot{position:absolute;inset:0;display:flex;flex-direction:column}
+
+  .grow{flex:1;min-height:0;min-width:0}
+  .row{display:flex}
+  .col{display:flex;flex-direction:column}
+  .growY{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden}
+  .growY::-webkit-scrollbar{width:5px;height:5px}
+  .growY::-webkit-scrollbar-thumb{background:rgba(140,158,178,.32);border-radius:3px}
+  .growY::-webkit-scrollbar-track{background:transparent}
+
+  .el{overflow:hidden;text-overflow:ellipsis}
+  .nowrap{white-space:nowrap}
+
+  /* ---------------- LAN scanner ---------------- */
+  .radar{position:relative;height:100%;aspect-ratio:1;max-width:100%}
+  .radar svg{position:absolute;inset:0;width:100%;height:100%}
+  .radar .radarsweep{position:absolute;inset:0;border-radius:50%;pointer-events:none;
+    animation:radarSpin 3s linear infinite}
+  @keyframes radarSpin{to{transform:rotate(360deg)}}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .spin{animation:spin 1.1s linear infinite}
+  @media (prefers-reduced-motion:reduce){
+    .radar .radarsweep,.spin{animation:none}
+  }
+
+  /* theme sheet */
+  #sheet{
+    position:absolute;inset:0;display:none;flex-direction:column;justify-content:flex-end;
+    background:rgba(0,0,0,.42); backdrop-filter:blur(2px); z-index:40;
+  }
+  #sheet.open{display:flex}
+  .tile{cursor:pointer;transition:.14s}
+  .tile:hover{filter:brightness(1.22)}
+
+  /* inspector */
+  #inspect{
+    width:246px;flex:0 0 246px;border-left:1px solid var(--line);overflow-y:auto;
+    background:linear-gradient(180deg,rgba(16,22,33,.96),rgba(10,14,21,.96));padding:14px;
+  }
+  #inspect h4{margin:0 0 9px;font-size:10px;letter-spacing:1.6px;color:var(--dim);text-transform:uppercase;font-weight:700}
+  #inspect section{margin-bottom:18px}
+  .kv{display:flex;justify-content:space-between;gap:8px;padding:4px 0;border-bottom:1px dashed rgba(255,255,255,.055);font-size:11px}
+  .kv span:first-child{color:var(--dim)}
+  .kv span:last-child{color:#cfe3f5;font-weight:600;text-align:right}
+  .hint{color:var(--dim);font-size:10.5px;line-height:1.65;margin:8px 0 0}
+  .hint b{color:#9fc4e0;font-weight:600}
+  code{background:#0d131e;border:1px solid #222d40;border-radius:3px;padding:0 4px;font-size:10px;color:#9fd8ff}
+  @media (max-width:900px){ #inspect{display:none} }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="topbar">
+    <div class="brand"><i></i><div>PC MONITOR<small>Flutter UI 交互原型 / 非真实编译产物</small></div></div>
+
+    <div class="grp">
+      <label>视口</label>
+      <button class="btn" data-vp="480x480" title="固件参考：PCMonitorFirmware">480×480</button>
+      <button class="btn" data-vp="800x480" title="固件参考：PCMonitorFirmware800_480">800×480</button>
+      <button class="btn" data-vp="393x852">手机竖屏</button>
+      <button class="btn" data-vp="852x393">手机横屏</button>
+      <button class="btn" data-vp="820x1180">平板竖屏</button>
+      <button class="btn" data-vp="1180x820">平板横屏</button>
+    </div>
+
+    <div class="grp">
+      <label>自定义</label>
+      <input type="number" id="inW" value="393" min="240" max="2400" step="1">
+      <span style="color:var(--dim)">×</span>
+      <input type="number" id="inH" value="852" min="240" max="2400" step="1">
+      <button class="btn" id="applyWH">应用</button>
+      <button class="btn" id="swapWH">⇄ 转屏</button>
+    </div>
+
+    <div class="grp">
+      <label>主题</label>
+      <span id="themeBtns"></span>
+    </div>
+
+    <div class="grp">
+      <label>链路</label>
+      <select id="linkSel">
+        <option value="SIM">SIMULATED / 1 Hz</option>
+        <option value="LIVE">Connected</option>
+        <option value="STALE">Data stale</option>
+        <option value="WAIT">Looking for PC</option>
+      </select>
+      <label class="chk"><input type="checkbox" id="cbHidden">隐藏传感器</label>
+      <label class="chk"><input type="checkbox" id="cbFit" checked>适配窗口</label>
+    </div>
+
+    <div class="grp">
+      <label>主机连接</label>
+      <button class="btn" data-page="hosts">连接页</button>
+      <button class="btn" data-page="dashboard">仪表盘</button>
+      <select id="hostSel" title="扫描/配对状态">
+        <option value="idle">idle</option>
+        <option value="scanning">scanning</option>
+        <option value="scanning-empty">scanning / 无主机</option>
+        <option value="found">found</option>
+        <option value="requesting">requesting</option>
+        <option value="connecting">connecting</option>
+        <option value="online">online</option>
+        <option value="offline">offline</option>
+        <option value="failed">failed</option>
+      </select>
+    </div>
+  </div>
+
+  <div id="main">
+    <div id="stage">
+      <div id="fitwrap">
+        <div id="bezel"><div id="device"></div></div>
+      </div>
+    </div>
+    <aside id="inspect">
+      <section>
+        <h4>响应式引擎</h4>
+        <div id="metrics"></div>
+      </section>
+      <section>
+        <h4>导航状态机</h4>
+        <div id="navinfo"></div>
+        <p class="hint">
+          点 <b>CPU 卡</b> → CPU 详情；点 <b>GPU 卡</b> → GPU 设备列表（只有 1 个适配器时直进详情）；
+          点 <b>DISK 卡</b> → 磁盘详情。<br>
+          详情页左上 <b>‹ HOME</b> 返回面板；GPU 详情右上另有 <b>‹ DEVICES</b> 回设备列表。
+          设备列表里点任意卡片会同时把它<strong>设为面板适配器</strong>并进入详情页 —— 一次点击两个效果。
+        </p>
+      </section>
+      <section>
+        <h4>保持的固件规则</h4>
+        <p class="hint">
+          · 传感器缺失显示占位符（勾选"隐藏传感器"看 <code>--</code> 路径）<br>
+          · GPU 身份只用 protocol id，不用数组下标<br>
+          · 面板 GPU 数值/条形/折线同取"最忙引擎"<br>
+          · 60 点历史窗口，断点不插值，切适配器清空<br>
+          · 文本走 1 Hz 采样节奏，条形 20 Hz 缓动<br>
+          · 温度 ≥85 °C 转告警色
+        </p>
+      </section>
+      <section>
+        <h4>主机连接页</h4>
+        <p class="hint">
+          手机没有 USB 配对通道，所以这一页就是配网流程本身：广播 <code>discovery.probe</code> →
+          收 <code>discovery.offer</code> → 发 <code>pairing.request</code> → 等 PC 上点确认 →
+          拿 <code>pairing.grant</code> 的 32 字节密钥 → 开 <code>ws://…:8765/ws</code> 做 challenge/authenticate。<br>
+          点主机卡：<b>已配对</b>直接进入 <code>online</code>，<b>未配对</b>进入 <code>requesting</code>（PC 上弹窗等确认）。
+          雷达光点的方位/距离由 hostId 哈希决定，重绘不会乱跳。
+        </p>
+      </section>
+      <section>
+        <h4>配色来源</h4>
+        <p class="hint">6 套主题的色值与 <code>lib/theme/monitor_theme.dart</code> 完全一致；语义通道色（CPU/GPU/RAM/VRAM/HOT）跨主题含义不变。</p>
+      </section>
+    </aside>
+  </div>
+</div>
+
+<script>
+"use strict";
+/* =========================================================================
+   1. THEMES  — 色值逐字取自 lib/theme/monitor_theme.dart
+   ========================================================================= */
+const THEMES = [
+  { id:'firmware_dark', name:'Firmware Dark', desc:'The original ESP32 palette, unchanged.', dark:true,
+    bg:'#0B1017', panel:'#131C27', panelAlt:'#17222F', border:'#243140', track:'#243342',
+    text:'#EDF3FA', muted:'#8C9EB2', cpu:'#55D9E8', gpu:'#B0E580', ram:'#94A9FF', vram:'#D5B3EE',
+    hot:'#F4BA73', danger:'#F06F6F', glow:'#55D9E8', grid:0.28, scan:0.04, cut:0, motif:'grid' },
+
+  { id:'cryo_blue', name:'Cryo Blue', desc:'Cold clinical blues with crisp edges.', dark:true,
+    bg:'#061019', panel:'#0D1D2C', panelAlt:'#12283A', border:'#1E4460', track:'#16324A',
+    text:'#E7F5FF', muted:'#7FA7C4', cpu:'#4CC9FF', gpu:'#5BE7C4', ram:'#7FA0FF', vram:'#B39DFF',
+    hot:'#FFC078', danger:'#FF6B6B', glow:'#4CC9FF', grid:0.34, scan:0.05, cut:0, motif:'grid' },
+
+  { id:'neon_pulse', name:'Neon Pulse', desc:'Cyan and magenta on deep indigo.', dark:true,
+    bg:'#07060F', panel:'#121026', panelAlt:'#1A1735', border:'#3A2F6B', track:'#261F4A',
+    text:'#F2EEFF', muted:'#9C90C8', cpu:'#3BF0FF', gpu:'#7CFF9E', ram:'#B18CFF', vram:'#FF8CE0',
+    hot:'#FFC46B', danger:'#FF5C8A', glow:'#3BF0FF', grid:0.42, scan:0.08, cut:14, motif:'grid' },
+
+  { id:'amber_terminal', name:'Amber CRT', desc:'Warm phosphor terminal with soft bloom.', dark:true,
+    bg:'#0E0A05', panel:'#1C1409', panelAlt:'#241A0C', border:'#4A3616', track:'#33240E',
+    text:'#FFE9C4', muted:'#B39262', cpu:'#FFB347', gpu:'#E8D96A', ram:'#FF8A50', vram:'#D9A66B',
+    hot:'#FF7A45', danger:'#FF4D3D', glow:'#FFB347', grid:0.30, scan:0.14, cut:0, motif:'diagonal' },
+
+  { id:'matrix_green', name:'Matrix', desc:'Monochrome green terminal aesthetic.', dark:true,
+    bg:'#040B06', panel:'#0A160D', panelAlt:'#0E1E12', border:'#1B3A22', track:'#13301B',
+    text:'#D6FFE0', muted:'#6FA97F', cpu:'#43FF7A', gpu:'#8AFF6B', ram:'#29D98B', vram:'#5FE8AE',
+    hot:'#C8FF5C', danger:'#FF6B6B', glow:'#43FF7A', grid:0.38, scan:0.10, cut:0, motif:'diagonal' },
+
+  { id:'daylight', name:'Daylight', desc:'Light surfaces with dark text for bright rooms.', dark:false,
+    bg:'#EEF2F7', panel:'#FFFFFF', panelAlt:'#F6F9FC', border:'#D2DCE8', track:'#DEE7F0',
+    text:'#121A24', muted:'#5C6E82', cpu:'#0E7C93', gpu:'#3E7A2E', ram:'#3B54B8', vram:'#7A4FA3',
+    hot:'#B4690E', danger:'#C0392B', glow:'#0E7C93', grid:0.30, scan:0.0, cut:0, motif:'grid' },
+];
+
+/* =========================================================================
+   2. utils
+   ========================================================================= */
+const clamp=(v,a,b)=>v<a?a:(v>b?b:v);
+const FONT_MIN=(s)=>clamp(s,9.0,Infinity);
+
+/* =========================================================================
+   3. responsive engine — port of lib/responsive/responsive.dart
+   ========================================================================= */
+function resolveMetrics(vw,vh){
+  const short=Math.min(vw,vh), long=Math.max(vw,vh);
+  const portrait = vh>=vw;
+  const cls = short<380?'compact': short<600?'phone': short<840?'tablet':'largeTablet';
+  let variant;
+  if(cls==='compact'||cls==='phone') variant = portrait?'compactStack':'gridWide';
+  else if(cls==='tablet') variant = portrait?'splitColumns':'gridExtraWide';
+  else variant = portrait?'gridWide':'gridExtraWide';
+
+  const raw = short/480;
+  const scale = clamp(1.0+(raw-1.0)*0.55, 0.72, 1.85);
+
+  const isWide = variant==='gridWide'||variant==='gridExtraWide';
+  return {
+    vw, vh, short, long, portrait, cls, variant, scale, isWide,
+    minFont: 9,
+    gutter: clamp(10*scale,8,18),
+    radius: clamp(12*scale,8,20),
+    padding: clamp(12*scale,9,20),
+    pagePadding: isWide ? 16*scale : 14*scale,
+    headerHeight: isWide ? 64*scale : 72*scale,
+    railWidth: 72*scale,
+    hasSideRail: variant==='splitColumns',
+    dashboardColumns: variant==='compactStack'?1: variant==='splitColumns'?1: variant==='gridWide'?2:3,
+  };
+}
+let M = resolveMetrics(480,480);
+/** The portrait dashboard never scrolls: when its column is taller than the
+ *  viewport it is compressed instead. `DM` overrides `M` while that subtree is
+ *  generated, and is cleared again straight afterwards. Mirrors
+ *  LayoutMetrics.compressed() in responsive.dart. */
+let DM = null;
+const MM = ()=> DM||M;
+const F = (s)=>{ const m=MM(); return clamp(s*m.scale, Math.min(m.minFont, s), s*2.4); };  // font()
+const P = (p)=>p*MM().scale;                                                              // px()
+function compressMetrics(m,factor){
+  const f=clamp(factor,0.5,1.0);
+  if(f>=0.999) return m;
+  const s=clamp(m.scale*f,0.45,1.85);
+  return Object.assign({},m,{
+    scale:s, minFont:7,
+    gutter:clamp(10*s,6,18), radius:clamp(12*s,6,20), padding:clamp(12*s,6,20),
+    pagePadding:(m.isWide?16:14)*s,
+  });
+}
+function listColumns(w,minItem,max){ return clamp(Math.floor(w/(minItem*M.scale)),1,max||6); }
+function cardColumns(w){ return clamp(Math.floor(w/(340*M.scale)),1,3); }
+
+/* =========================================================================
+   4. formatting — port of lib/util/format.dart
+   ========================================================================= */
+const Ph={ percent:'--%', celsius:'-- C', watt:'-- W', ghz:'-- GHz', gib:'-- GiB', rate:'--', count:'--', date:'---- / -- / --', clock:'--' };
+const pcPercent=v=>clamp(v,0,100);
+const fmtPercent=(v,ok)=> ok? pcPercent(Math.round(v))+'%' : Ph.percent;
+const fmtTemp=(v,ok,d=1)=> (ok&&isFinite(v))? v.toFixed(d)+' C' : Ph.celsius;
+const fmtTempShort=(v,ok)=> (ok&&isFinite(v))? v.toFixed(0) : '--';
+const fmtPower=(v,ok)=> (ok&&isFinite(v))? v.toFixed(0)+' W' : Ph.watt;
+const fmtPowerShort=(v,ok)=> (ok&&isFinite(v))? v.toFixed(0) : '--';
+const fmtClock=(v,ok)=> (ok&&isFinite(v))? v.toFixed(2)+' GHz' : Ph.ghz;
+function fmtCapacityPair(u,uv,t,tv){
+  const us=(uv&&isFinite(u))?u.toFixed(1):'--';
+  const ts=(tv&&isFinite(t))?t.toFixed(1):'--';
+  return us+' / '+ts+' GiB';
+}
+function fmtRate(mb,ok){
+  if(!ok||!isFinite(mb)) return Ph.rate;
+  if(mb>=1000) return (mb/1000).toFixed(1)+' GB/s';
+  if(mb>=1)    return mb.toFixed(1)+' MB/s';
+  if(mb>=0.001)return (mb*1000).toFixed(1)+' KB/s';
+  return (mb*1e6).toFixed(0)+' B/s';
+}
+const isHot=(t,ok)=> ok && t>=85.0;
+
+// wrap_model_text(): greedy wrap, never splits a token, max 3 lines
+function wrapModel(text,maxChars,maxLines=3){
+  const s=String(text||'').trim();
+  if(!s) return '--';
+  if(maxChars<=0) return s;
+  const words=s.split(/\s+/); const lines=[]; let cur='';
+  for(const w of words){
+    if(!cur){ cur=w; continue; }
+    if(cur.length+1+w.length<=maxChars) cur+=' '+w;
+    else { lines.push(cur); cur=w; }
+  }
+  if(cur) lines.push(cur);
+  if(!lines.length) return s;
+  if(lines.length<=maxLines) return lines.join('\n');
+  const kept=lines.slice(0,maxLines);
+  const last=kept[maxLines-1];
+  kept[maxLines-1] = (last.length+3<=maxChars)? last+'...' : last.slice(0,Math.max(0,last.length-3))+'...';
+  return kept.join('\n');
+}
+const clampName=(n,mx)=>{ const v=(n&&n.length)?n:'--'; return v.length<=mx?v:v.slice(0,mx); };
+
+const MONTHS=['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+const WEEKDAYS=['SUNDAY','MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY'];
+const p2=n=>String(n).padStart(2,'0');
+function clockFields(now){
+  if(!now) return {valid:false,month:'---',day:'--',weekday:'---',date:Ph.date,hh:'--',mm:'--',ss:'--'};
+  const y=now.getFullYear(),mo=now.getMonth()+1,d=now.getDate(),wd=now.getDay();
+  const H=now.getHours(),Mi=now.getMinutes(),S=now.getSeconds();
+  const ok = y>=1900&&y<=9999&&mo>=1&&mo<=12&&d>=1&&d<=31&&wd>=0&&wd<=6&&H>=0&&H<=23&&Mi>=0&&Mi<=59&&S>=0&&S<=60;
+  if(!ok) return {valid:false,month:'---',day:'--',weekday:'---',date:Ph.date,hh:'--',mm:'--',ss:'--'};
+  return {valid:true,month:MONTHS[mo-1],day:p2(d),weekday:WEEKDAYS[wd],
+          date:`${y} / ${p2(mo)} / ${p2(d)}`,hh:p2(H),mm:p2(Mi),ss:p2(S)};
+}
+
+/* =========================================================================
+   5. world — port of lib/services/mock_data_source.dart (workstation profile)
+   ========================================================================= */
+const ENGINE_NAMES=['3D','Copy','Compute','Video Decode','Video Encode','CUDA / Compute 0','Video Processing','Compute 1'];
+const W={
+  t:0, rnd:0x324b,
+  cores:[], gpus:[], disks:[],
+  cpuUsage:45, cpuTemp:47, cpuPower:45, cpuClock:4.2,
+  ramTotal:32, ramUsed:15.3,
+  netDown:12, netUp:1.6,
+  hidden:false,
+};
+function noise(){
+  W.rnd=(Math.imul(W.rnd,1664525)+1013904223)>>>0;
+  return (((W.rnd>>>16)&0xFFFF)/32767.5)-1.0;
+}
+const approach=(v,t,f,step)=> v + clamp((t-v)*f,-step,step);
+
+function seedWorld(){
+  W.t=0; W.rnd=0x324b;
+  W.cores=Array.from({length:32},(_,i)=>28.0+(i%16)*2.0);
+  W.gpus=[
+    { name:'NVIDIA GeForce RTX 4070', vendor:'NVIDIA', discreteValid:true, discrete:true,
+      temp:49, power:80, vramUsed:5.4, vramTotal:12.0,
+      engines:ENGINE_NAMES.slice(0,6).map(n=>({name:n,usage:10})) },
+    { name:'Intel UHD Graphics 770', vendor:'Intel', discreteValid:true, discrete:false,
+      temp:38, power:9, vramUsed:0.5, vramTotal:4.0,
+      engines:ENGINE_NAMES.slice(0,4).map(n=>({name:n,usage:10})) },
+  ];
+  W.gpus[0].engines[0].usage=50; W.gpus[1].engines[0].usage=50;
+  const names=['Samsung 990 PRO','WD Blue SSD','Seagate BarraCuda'];
+  W.disks=names.map((n,i)=>({ name:n, read:40/(i+1), write:16/(i+1), activity:30, temp:38+i }));
+  W.cpuUsage=45; W.cpuTemp=47; W.cpuPower=45; W.cpuClock=4.2; W.ramUsed=15.3; W.netDown=12; W.netUp=1.6;
+  W.hidden=false;
+}
+
+function stepWorld(){
+  const t=(W.t%3600); W.t++;
+
+  // cores
+  let sum=0;
+  for(let c=0;c<W.cores.length;c++){
+    const target = 44.0 + 19.0*Math.sin(t*0.085) + 23.0*Math.sin(t*0.17+c*0.63) + noise()*8.0;
+    W.cores[c]=approach(W.cores[c], clamp(target,3,99), 0.36, 9.0);
+    sum+=Math.round(W.cores[c]);
+  }
+  const usage = Math.floor((sum + W.cores.length/2)/W.cores.length);
+  W.cpuUsage=usage;
+  W.cpuTemp = approach(W.cpuTemp, 35.0+usage*0.48, 0.09, 0.7);
+  W.cpuPower= approach(W.cpuPower, 16.0+usage*1.1, 0.28, 6.0);
+  W.cpuClock= approach(W.cpuClock, 3.4+usage*0.022, 0.25, 0.12);
+  W.ramUsed = approach(W.ramUsed, 16.4+2.5*Math.sin(t*0.025), 0.10, 0.12);
+
+  // gpus
+  for(let g=0;g<W.gpus.length;g++){
+    const G=W.gpus[g];
+    const engineCount = g===0 ? 6 + (Math.floor(W.t/24)%2)*2 : 4;
+    const active = (Math.floor(W.t/18)+g) % (g===0?5:4);
+    while(G.engines.length<engineCount) G.engines.push({name:ENGINE_NAMES[G.engines.length],usage:10});
+    while(G.engines.length>engineCount) G.engines.pop();
+
+    let peak=0;
+    for(let e=0;e<G.engines.length;e++){
+      let target = (e===active) ? 74.0+18.0*Math.sin(t*0.13+g) : 12.0+10.0*Math.sin(t*0.11+e);
+      if(g===1) target*=0.45;
+      G.engines[e].usage = Math.round(approach(G.engines[e].usage, clamp(target+noise()*3,0,100), 0.3, 8.0));
+      if(G.engines[e].usage>peak) peak=G.engines[e].usage;
+    }
+    G.temp = approach(G.temp, 34.0+peak*0.46, 0.07, 0.6);
+    G.power= approach(G.power, (g===0?24.0:4.0)+peak*(g===0?2.25:0.4), 0.23, 11.0);
+    G.vramUsed = approach(G.vramUsed, (g===0?4.0:0.3)+peak*(g===0?0.048:0.015), 0.10, 0.15);
+  }
+
+  W.netDown = approach(W.netDown, 15.0+12.0*Math.sin(t*0.12)+noise(), 0.3, 3.0);
+  W.netUp   = approach(W.netUp, 2.2+1.8*Math.sin(t*0.09+1.0), 0.25, 0.5);
+
+  for(let d=0;d<W.disks.length;d++){
+    const D=W.disks[d];
+    const sc = d===0?1.0:(d===1?0.12:0.35);
+    D.read  = approach(D.read,  (120.0+105.0*Math.sin(t*0.15+d))*sc, 0.3, 24.0*sc);
+    D.write = approach(D.write, (55.0+45.0*Math.sin(t*0.10+d))*sc, 0.28, 12.0*sc);
+    const busy=(D.read+D.write)/(d===0?4.0:1.5);
+    D.activity = clamp(Math.round(busy+0.5),0,100);
+    D.temp = approach(D.temp, 34.0+busy*0.2, 0.07, 0.3);
+  }
+}
+
+// busiest engine — pc_status_busiest_engine()
+function busiestEngine(gpu){
+  if(!gpu||!gpu.engines||!gpu.engines.length) return null;
+  let best=null;
+  for(const e of gpu.engines) if(!best||e.usage>best.usage) best=e;
+  return best;
+}
+
+/* =========================================================================
+   6. display smoother — port of display_smoother_config.h timing
+   ========================================================================= */
+const disp={};
+function easeTo(key,target,dt,tau,snap){
+  const cur=disp[key];
+  if(cur===undefined){ disp[key]=target; return target; }
+  const d=target-cur;
+  if(Math.abs(d)<=snap){ disp[key]=target; return target; }
+  const a=1-Math.exp(-dt/tau);
+  disp[key]=cur+d*a;
+  return disp[key];
+}
+
+/* =========================================================================
+   7. app state + navigation state machine (ui_app.c)
+   ========================================================================= */
+const S={
+  themeId:'cryo_blue',
+  page:'dashboard',
+  gpuIndex:0,        // adapter feeding the dashboard
+  openGpu:null,      // adapter open on the detail page
+  link:'SIM',
+  fit:true,
+  sheet:false,
+  // --- host discovery / pairing page ---
+  hostState:'scanning',  // idle|scanning|found|requesting|connecting|online|offline|failed
+  hostIndex:0,           // the host under the finger
+  hostEmpty:false,       // force the empty list, to show the "nothing yet" panel
+  peerId:null,           // the PC we hold a pairing secret for (app: PairingStore)
+  hostError:'The PC rejected this device. Pair it again.',
+  deviceName:'Android Monitor 3C4D',
+};
+const T = ()=> THEMES.find(t=>t.id===S.themeId);
+const target=_=>({ /* nothing, placeholder */ });
+
+const CPU_HISTORY=[], GPU_HISTORY=[];
+/** Per-adapter windows for the GPU device list, indexed like `W.gpus`. Unlike
+ *  GPU_HISTORY these are not reset by an adapter switch. */
+const GPU_HISTORIES=[];
+const HIST_POINTS=60;
+let historyGpuId=null;
+
+function gpuCount(){ return W.gpus.length; }
+function selectedGpu(){ return W.gpus[S.gpuIndex]||null; }
+function selectedEngine(){ return busiestEngine(selectedGpu()); }
+
+function pushHistory(){
+  const gpu=selectedGpu();
+  const eng=busiestEngine(gpu);
+  const id = gpu ? gpu.name : '';
+  if(id!==historyGpuId){
+    historyGpuId=id;
+    CPU_HISTORY.length=0; GPU_HISTORY.length=0;
+    for(let i=0;i<HIST_POINTS;i++){ CPU_HISTORY.push(null); GPU_HISTORY.push(null); }
+  }
+  CPU_HISTORY.push(W.cpuUsage);
+  GPU_HISTORY.push(eng?eng.usage:null);
+  while(CPU_HISTORY.length>HIST_POINTS) CPU_HISTORY.shift();
+  while(GPU_HISTORY.length>HIST_POINTS) GPU_HISTORY.shift();
+
+  W.gpus.forEach((g,i)=>{
+    if(!GPU_HISTORIES[i]){
+      GPU_HISTORIES[i]=[];
+      for(let k=0;k<HIST_POINTS;k++) GPU_HISTORIES[i].push(null);
+    }
+    const e=busiestEngine(g);
+    GPU_HISTORIES[i].push(e?e.usage:null);
+    while(GPU_HISTORIES[i].length>HIST_POINTS) GPU_HISTORIES[i].shift();
+  });
+}
+
+function statusText(){
+  switch(S.link){
+    case 'SIM':   return 'SIMULATED / 1 Hz';
+    case 'LIVE':  return 'Connected';
+    case 'STALE': return 'Data stale';
+    default:      return 'Looking for PC';
+  }
+}
+function connectionKind(){
+  const u=statusText().toUpperCase();
+  if(u.includes('SIMULATED')) return 'simulated';
+  if(u.includes('LIVE')||statusText().includes('Connected')) return 'live';
+  if(u.includes('STALE')) return 'stale';
+  return 'waiting';
+}
+const kindColor = k => (k==='simulated'||k==='live') ? T().gpu : T().hot;
+const kindBadge = k => ({simulated:'SIM',live:'LIVE',stale:'STALE',waiting:'WAIT'}[k]);
+
+const nav = {
+  openCpu(){ S.page='cpu'; render(); },
+  openDisks(){ S.page='disks'; render(); },
+  openGpus(){
+    if(gpuCount()===1){ S.openGpu=0; S.page='gpuDetail'; }
+    else S.page='gpuSelector';
+    render();
+  },
+  chooseGpu(i){ S.gpuIndex=i; S.openGpu=i; S.page='gpuDetail'; render(); },
+  home(){ S.openGpu=null; S.page='dashboard'; render(); },
+
+  // --- host link ---
+  openHosts(){ S.page='hosts'; if(S.hostState==='idle') S.hostState='scanning'; render(); },
+  scan(){
+    // Inert while a scan or a connection attempt is in flight - the analogue of
+    // `HudButton(onPressed: busy ? null : () => _scan())`.
+    if(['scanning','requesting','connecting'].includes(S.hostState)) return;
+    S.hostState='scanning'; S.link='WAIT'; render();
+  },
+  /** Landing on a card does what `HostConnectionController.select` does: an
+   *  unpaired host asks its owner to confirm, a paired one just reconnects. */
+  pickHost(i){
+    const h=hostAt(i);
+    if(!h) return;
+    // Settle "do we already hold a secret for this PC?" before moving the
+    // cursor. `pairedHost()` reads `S.hostIndex`, so asking after the
+    // reassignment compares the host against itself and every tap would look
+    // like a reconnect to a PC we already trust.
+    const known=h.id===S.peerId;
+    S.hostIndex=i;
+    // A tap on a known PC is a reconnect. Anything else goes out as a
+    // `pairing.request`, and the secret is only written once the PC's owner
+    // confirms - so the previous peer survives until then.
+    if(known) S.peerId=h.id;
+    S.hostState = known ? 'online' : 'requesting';
+    S.link      = known ? 'LIVE'   : 'WAIT';
+    render();
+  },
+  reconnect(){ S.hostState='connecting'; S.link='WAIT'; render(); },
+  /** The PC's owner pressed Confirm: `pairing.grant` arrived, the secret is
+   *  written to the store and the socket opens. The old peer - if any - is
+   *  only replaced here, never when the request goes out. */
+  granted(){
+    const h=awaitingHost()||hostAt(S.hostIndex);
+    if(h) S.peerId=h.id;
+    S.hostState='connecting'; S.link='WAIT'; render();
+  },
+  /** Drops the stored secret - the app's `PairingStore.clear()`. */
+  forget(){ S.peerId=null; S.hostState='scanning'; S.link='WAIT'; render(); },
+  cancel(){ S.hostState='found'; render(); },
+  /** Back to the dashboard on simulated data - the app's offline escape hatch. */
+  disconnect(){ S.hostState='offline'; S.link='STALE'; render(); },
+  simulate(){ S.link='SIM'; S.page='dashboard'; render(); },
+  renameDevice(){
+    const next=prompt('Device name (shown in the PC pairing dialog)', S.deviceName);
+    if(next!=null && String(next).trim()) S.deviceName=String(next).trim().slice(0,40);
+    render();
+  },
+  /** Mirrors the controller's own transition: online means the status bar
+   *  switches to the link's own vocabulary. */
+  setHostState(st){
+    // online/offline/connecting only exist once a PC is remembered - `start()`
+    // leaves the controller idle otherwise - so inventing one of those states
+    // without a stored secret would render a page the app can never reach.
+    if(['online','offline','connecting'].includes(st) && !rememberedHost()){
+      S.peerId=((hostAt(S.hostIndex)||HOSTS[0])||{}).id||null;
+    }
+    S.hostState=st;
+    S.link = st==='online' ? 'LIVE' : (st==='offline'||st==='failed') ? 'STALE' : 'WAIT';
+    render();
+  },
+};
+
+/* =========================================================================
+   8. DOM helpers
+   ========================================================================= */
+const dev=document.getElementById('device');
+const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/\n/g,'<br>');
+
+function clipCut(cut){
+  if(cut<=0) return '';
+  const c=cut;
+  return `clip-path:polygon(${c}px 0,calc(100% - ${c}px) 0,100% ${c}px,100% calc(100% - ${c}px),calc(100% - ${c}px) 100%,${c}px 100%,0 calc(100% - ${c}px),0 ${c}px);`;
+}
+/** HudPanel. `fill:true` stretches the panel to its flex cell (mirrors
+ *  Expanded(child: HudPanel(...)) on the Flutter side). */
+function panel(o){
+  const th=T();
+  const r = o.radius==null?12:o.radius;
+  const cut = o.cut||0;
+  const accent = o.accent||th.border;
+  const glow = o.glow||0;
+  const bw = o.borderWidth==null?1:o.borderWidth;
+  const bg = o.filled===false?'transparent':th.panel;
+  const radiusCss = cut>0?'':`border-radius:${r}px;`;
+  const shadow = glow>0 ? `box-shadow:0 0 ${16*glow+4}px ${hexA(accent,0.34*glow)};` : '';
+  const fill = o.fill ? 'height:100%;box-sizing:border-box;' : '';
+  return `<div class="${o.cls||''}" ${o.onclick?`data-click="${o.onclick}"`:''} ${o.sem?`title="${esc(o.sem)}"`:''}
+    style="position:relative;${fill}box-sizing:border-box;background:${bg};${radiusCss}${shadow}${clipCut(cut)}">
+      <div style="position:absolute;inset:0;border:${bw}px solid ${accent};${radiusCss}${clipCut(cut)};pointer-events:none"></div>
+      <div style="position:relative;${fill}padding:${o.pad||'0'}">${o.children||''}</div>
+    </div>`;
+}
+/** Overlays an alpha on a colour. Accepts `#rrggbb` *and* an existing
+ *  `rgb()/rgba()` string - panels are routinely given an accent that a caller
+ *  already ran through `hexA`, and re-parsing that as hex yields NaN. */
+function hexA(hex,a){
+  a=clamp(a,0,1);
+  const s=String(hex);
+  if(s.indexOf('rgba(')===0||s.indexOf('rgb(')===0){
+    const open=s.indexOf('(');
+    const parts=s.slice(open+1,s.length-1).split(',');
+    const r=parseFloat(parts[0]),g=parseFloat(parts[1]),b=parseFloat(parts[2]);
+    const al=(parts.length>3?parseFloat(parts[3]):1)*a;
+    return `rgba(${r},${g},${b},${al.toFixed(3)})`;
+  }
+  const h=s.replace('#','');
+  const r=parseInt(h.slice(0,2),16),g=parseInt(h.slice(2,4),16),b=parseInt(h.slice(4,6),16);
+  return `rgba(${r},${g},${b},${a})`;
+}
+function bar(o){
+  const frac = o.valid===false ? 0 : clamp(o.value,0,100)/100;
+  const grad = o.gradientTo ? `background:linear-gradient(90deg,${o.color},${o.gradientTo});`
+                            : `background:${o.color};`;
+  const glow = (o.glow==null?0.55:o.glow);
+  const shadow = glow>0?`box-shadow:0 0 ${o.h*1.6}px ${hexA(o.color,glow*0.8)};`:'';
+  return `<div data-bar="${o.k}" style="height:${o.h}px;border-radius:${o.h/2}px;overflow:hidden;background:${T().track}">
+    <div style="height:100%;width:${(frac*100).toFixed(2)}%;${grad}${shadow}border-radius:${o.h/2}px;transition:width 90ms linear"></div>
+  </div>`;
+}
+function chip(color,w,h){ return `<span style="display:inline-block;width:${w}px;height:${h}px;border-radius:1px;background:${color};box-shadow:0 0 7px ${hexA(color,0.55)};vertical-align:middle"></span>`; }
+function badge(label,color,fs,hpad,vpad,filled){
+  return `<span style="display:inline-block;padding:${vpad==null?2:vpad}px ${hpad==null?7:hpad}px;border:1px solid ${hexA(color,0.75)};
+    background:${filled?hexA(color,0.18):'transparent'};border-radius:4px;color:${color};font-size:${fs||10}px;font-weight:700;
+    letter-spacing:.9px;line-height:1.1;white-space:nowrap">${esc(label)}</span>`;
+}
+const TS=(size,color,weight,ls,extra)=>`font-size:${size}px;color:${color};font-weight:${weight||400};letter-spacing:${ls||0}px;${extra||''}`;
+
+/* =========================================================================
+   9. render
+   ========================================================================= */
+function motifLayers(th,accent){
+  const step=clamp(M.short/26,16,40);
+  const dstep=clamp(M.short/20,18,44);
+  let m='';
+  const lc=hexA(th.border, th.grid*0.55);
+  if(th.motif==='grid'){
+    m=`background-image:linear-gradient(to right,${lc} 1px,transparent 1px),linear-gradient(to bottom,${lc} 1px,transparent 1px);background-size:${step}px ${step}px;`;
+  }else if(th.motif==='diagonal'){
+    m=`background-image:repeating-linear-gradient(45deg,${hexA(th.border,th.grid*0.5)} 0 0.7px,transparent 0.7px ${dstep}px);`;
+  }else if(th.motif==='rings'){
+    const c=M.short*0.10, s=M.short*0.09;
+    m=`background-image:repeating-radial-gradient(circle at 12% 92%,transparent 0 ${c}px,${lc} ${c}px ${c+0.7}px);`;
+  }
+  const scan = th.scan>0 ? `background-image:repeating-linear-gradient(to bottom,${hexA(th.dark?'#000':'#fff',th.scan)} 0 1px,transparent 1px 3px);` : '';
+  const bloom = `background-image:radial-gradient(circle at 86% 6%,${hexA(accent, th.dark?0.16:0.10)} 0%,transparent 62%);`;
+  return `<div class="motif" style="${m}"></div><div class="scan" style="${scan}"></div><div class="bloom" style="${bloom}"></div>`;
+}
+
+function render(){
+  const th=T();
+  M=resolveMetrics(VIEW.w,VIEW.h);
+
+  dev.style.width=VIEW.w+'px';
+  dev.style.height=VIEW.h+'px';
+  dev.style.background=th.bg;
+  dev.style.color=th.text;
+  document.getElementById('bezel').style.padding = (M.short>700?13:9)+'px';
+
+  const accent=th.cpu;
+  let html=motifLayers(th,accent);
+  html+=`<div class="screenroot">${screenHtml()}</div>`;
+  if(S.sheet) html+=sheetHtml();
+  dev.innerHTML=html;
+
+  // The sheet's inner surface must not let clicks reach the dismiss backdrop.
+  dev.querySelectorAll('[data-stop]').forEach(el=>{
+    el.addEventListener('click',(e)=>e.stopPropagation());
+  });
+
+  dev.querySelectorAll('[data-click]').forEach(el=>{
+    el.style.cursor='pointer';
+    el.addEventListener('click',(e)=>{
+      e.stopPropagation();
+      const k=el.getAttribute('data-click');
+      if(k==='cpu') nav.openCpu();
+      else if(k==='gpus') nav.openGpus();
+      else if(k==='disks') nav.openDisks();
+      else if(k==='home') nav.home();
+      else if(k==='hosts') nav.openHosts();
+      else if(k==='rescan') nav.scan();
+      else if(k==='reconnect') nav.reconnect();
+      else if(k==='forget') nav.forget();
+      else if(k==='cancel') nav.cancel();
+      else if(k==='disconnect') nav.disconnect();
+      else if(k==='simulate') nav.simulate();
+      else if(k==='rename') nav.renameDevice();
+      else if(k.startsWith('host:')) nav.pickHost(parseInt(k.slice(5),10));
+      else if(k==='devices') nav.openGpus();
+      else if(k==='theme'){ S.sheet=!S.sheet; render(); }
+      else if(k.startsWith('pick:')){ S.themeId=k.slice(5); S.sheet=false; syncToolbar(); render(); }
+      else if(k.startsWith('gpu:')) nav.chooseGpu(parseInt(k.slice(4),10));
+      else if(k==='closesheet'){ S.sheet=false; render(); }
+    });
+  });
+
+  paint();
+  updateInspector();
+  syncHostToolbar();
+}
+
+function screenHtml(){
+  switch(S.page){
+    case 'hosts':       return hostsHtml();
+    case 'dashboard':   return dashboardHtml();
+    case 'cpu':         return cpuDetailHtml();
+    case 'gpuSelector': return gpuSelectorHtml();
+    case 'gpuDetail':   return gpuDetailHtml();
+    case 'disks':       return diskDetailHtml();
+  }
+  return '';
+}
+
+/* ---------------------- status bar ---------------------- */
+function statusBarHtml(){
+  const th=T();
+  const c=kindColor(connectionKind());
+  return panel({
+    radius:M.radius, accent:hexA(c,0.55), pad:`${P(9)}px ${P(12)}px`,
+    children:`<div class="row" style="align-items:center">
+      <span data-k="dot" style="width:${P(7)}px;height:${P(7)}px;border-radius:50%;flex:0 0 auto;background:${c};box-shadow:0 0 8px ${hexA(c,.6)}"></span>
+      <span style="width:${P(8)}px"></span>
+      <span class="grow el" style="min-width:0;cursor:pointer" data-click="hosts" title="打开主机连接页（Flutter 侧为状态胶囊的 onOpenHosts）">
+        <div data-k="status.text" style="${TS(F(11),th.text,600,.8)}" class="el"></div>
+        <div style="height:${P(2)}px"></div>
+        <div data-k="status.date" style="${TS(F(9),th.muted,400,.6)}" class="el"></div>
+      </span>
+      <span style="width:${P(8)}px"></span>
+      <span data-k="status.clock" style="display:flex;align-items:flex-start;white-space:nowrap"></span>
+      <span style="width:${P(8)}px"></span>
+      <span data-k="status.badge"></span>
+      <span style="width:${P(6)}px"></span>
+      <span data-click="theme" style="display:inline-flex;padding:${P(4)}px;border-radius:6px;cursor:pointer" title="Interface theme">
+        <svg width="${P(17)}" height="${P(17)}" viewBox="0 0 24 24" fill="none" stroke="${th.cpu}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="13.5" cy="6.5" r=".5" fill="${th.cpu}"/><circle cx="17.5" cy="10.5" r=".5" fill="${th.cpu}"/>
+          <circle cx="8.5" cy="7.5" r=".5" fill="${th.cpu}"/><circle cx="6.5" cy="12.5" r=".5" fill="${th.cpu}"/>
+          <path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/>
+        </svg>
+      </span>
+    </div>`
+  });
+}
+
+/* ---------------------- processor card ---------------------- */
+function processorCardHtml(which,fill){
+  const th=T();
+  const data=derive();
+  const cpu = which==='cpu';
+  const accent = cpu?th.cpu:th.gpu;
+  const compact = M.variant==='compactStack'||M.variant==='splitColumns';
+  const title = cpu?'CPU':'GPU';
+  const tag = cpu?data.cpuTag:data.gpuTag;
+  const model = cpu?data.cpuModel:data.gpuModel;
+  const detail = cpu?data.cpuDetail:data.gpuDetail;
+  const detailHot = cpu?data.cpuDetailHot:data.gpuDetailHot;
+  const hist = cpu?'cpuHistory':'gpuHistory';
+
+  // The model name now fills what used to be the card's biggest dead band: the
+  // whole right half, level with the big percentage.
+  const modelStyle = `text-align:right;min-width:0;${TS(F(15),hexA(th.text,0.85),600,0.2,'line-height:1.18')};display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden`;
+
+  const mm=MM();
+  return panel({
+    radius:mm.radius, accent:hexA(accent,0.6), glow:0.55, pad:`${mm.padding}px`, fill:!!fill,
+    onclick: cpu?'cpu':'gpus', sem: title+' '+(tag||''),
+    children:`<div class="col" style="align-items:stretch;height:100%">
+      <div class="row" style="align-items:flex-start">
+        ${chip(accent,3,F(15))}
+        <span style="width:${P(10)}px"></span>
+        <span style="${TS(F(15),th.text,700,1.1)}">${title}</span>
+        <span style="width:${P(8)}px"></span>
+        <span data-k="${cpu?'cpu':'gpu'}.tag" class="grow el" style="${TS(F(10),accent,600,.7)};text-align:right;min-width:0"></span>
+      </div>
+      <div style="height:${P(6)}px"></div>
+      <div class="row" style="align-items:flex-end">
+        <span data-k="${cpu?'cpu':'gpu'}.num" style="${TS(F(44),th.text,700,0,'line-height:1;font-variant-numeric:tabular-nums')}"></span>
+        <span style="padding:0 0 ${P(7)}px ${P(3)}px;${TS(F(17),accent,700,0)}">%</span>
+        <span style="width:${P(14)}px;flex:0 0 auto"></span>
+        <span data-k="${cpu?'cpu':'gpu'}.model" class="grow" style="${modelStyle};padding-bottom:${P(5)}px;align-self:flex-end"></span>
+      </div>
+      <div style="height:${P(6)}px"></div>
+      <div data-k="${cpu?'cpu':'gpu'}.detail" class="el nowrap" style="${TS(F(12),detailHot?th.hot:th.muted,600,0)}"></div>
+      <div style="height:${P(8)}px"></div>
+      ${bar({k:(cpu?'cpu':'gpu')+'.bar',value:0,color:accent,valid:true,h:P(6),gradientTo:hexA(accent,0.65)})}
+      <div style="height:${P(6)}px"></div>
+      <!-- The 60s label is BOXED so it shrinks with the row instead of forcing
+           the card taller; on the compact column the chart is allowed to
+           collapse to nothing. -->
+      <div class="row" style="align-items:flex-end;flex:1 1 auto;min-height:${compact?0:P(28)}px">
+        <span style="flex:0 0 ${P(28)}px;align-self:stretch;display:flex;align-items:flex-end;overflow:hidden">
+          <span style="${TS(F(9),th.muted,400,.6)};white-space:nowrap">60s</span>
+        </span>
+        <span style="width:${P(6)}px;flex:0 0 auto"></span>
+        <span class="grow" style="height:100%;min-height:${compact?0:P(28)}px;min-width:0">
+          <canvas data-spark="${hist}" style="width:100%;height:100%;display:block"></canvas>
+        </span>
+      </div>
+    </div>`
+  });
+}
+
+function memoryTileHtml(which,fill){
+  const th=T();
+  const d=derive();
+  const ram = which==='ram';
+  const accent = ram?th.ram:th.vram;
+  const mm=MM();
+  return panel({
+    radius:mm.radius, accent:hexA(accent,0.5), pad:`${mm.padding}px`, fill:!!fill,
+    children:`<div class="col" style="justify-content:space-evenly;height:100%">
+      <div style="${TS(F(11),accent,700,1.1)}">${ram?'RAM':'VRAM'}</div>
+      <div class="row" style="align-items:flex-end">
+        <span data-k="${ram?'ram':'vram'}.pct" style="${TS(F(24),th.text,700,0)}"></span>
+        <span class="grow"></span>
+        <span data-k="${ram?'ram':'vram'}.cap" class="el" style="${TS(F(10),th.muted,400,0)};text-align:right;max-width:60%"></span>
+      </div>
+      ${bar({k:(ram?'ram':'vram')+'.bar',value:0,color:accent,valid:true,h:P(5)})}
+    </div>`
+  });
+}
+
+function ioTileHtml(which,fill){
+  const th=T();
+  const disk = which==='disk';
+  const accent = disk?th.gpu:th.cpu;
+  const title = disk?'DISK':'NETWORK';
+  const l1 = disk?{l:'R',c:th.cpu}:{l:'DL',c:th.text};
+  const l2 = disk?{l:'W',c:th.gpu}:{l:'UL',c:th.text};
+  const line=(o)=>`<div class="row" style="align-items:center">
+      <span style="width:${P(22)}px;flex:0 0 auto;${TS(F(10),th.muted,600,.6)}">${o.l}</span>
+      <span class="grow el nowrap" data-k="${o.k}" style="${TS(F(13),o.c,600,0)};text-align:right;min-width:0"></span>
+    </div>`;
+  const mm=MM();
+  return panel({
+    radius:mm.radius, accent:hexA(accent,0.5), pad:`${mm.padding}px`, fill:!!fill,
+    onclick: disk?'disks':null, sem:title,
+    children:`<div class="col" style="justify-content:space-evenly;height:100%">
+      <div class="row" style="align-items:center">
+        <span style="${TS(F(11),th.muted,700,1.1)}">${title}</span>
+        <span class="grow"></span>
+        ${disk?`<span style="color:${th.muted};font-size:${P(15)}px;line-height:1">›</span>`:''}
+      </div>
+      ${line({l:l1.l,c:l1.c,k:disk?'disk.r':'net.dl'})}
+      ${line({l:l2.l,c:l2.c,k:disk?'disk.w':'net.ul'})}
+    </div>`
+  });
+}
+
+/** Calendar + clock tile. `compact` builds the portrait dashboard's full-width
+ *  band (one memory tile tall) instead of a wide-grid cell; `heightPx` is that
+ *  band's height, which is what bounds the digit size there. Mirrors the two
+ *  shapes of `_ClockCard` in dashboard_screen.dart. */
+function clockCardHtml(fill,compact,heightPx){
+  const th=T();
+  const m=MM();
+  // In the grid the clock occupies one column of a three-column row; in the
+  // band it spans the whole column. Either way the digits are sized to fill
+  // what is left of the cell.
+  const contentW = m.vw - 2*m.pagePadding;
+  const colW = compact ? contentW : (contentW - 2*m.gutter)/3;
+  const calW = P(compact?58:74);
+  const gap  = P(compact?4:6);
+  // The year / month / day line that now leads the readout, plus the digits.
+  const dateH = F(11)*1.25;
+  // "HH:MM:SS" is eight tabular glyphs (~4.4 em) now that the seconds share
+  // the hour/minute size.
+  const widthBound = (colW - 2*m.padding - calW - P(12))/4.4;
+  // The band shape is short as well as wide, so the digits are also bound by
+  // the height left over once the date line has taken its share.
+  const heightBound = (compact && heightPx>0)
+    ? Math.max(F(18), heightPx - 2*m.padding - gap - dateH)
+    : Infinity;
+  const digit = compact
+    ? clamp(Math.min(widthBound,heightBound), F(26), F(58))
+    : clamp(widthBound, F(28), F(62));
+  // Every digit shares one size - the seconds are no longer shrunk.
+  const digits = `<div class="row nowrap" style="align-items:flex-start">
+      <span data-k="cal.hh" style="${TS(digit,th.text,700,0,'line-height:1')}"></span>
+      <span style="${TS(digit,th.muted,700,0,'line-height:1')}">:</span>
+      <span data-k="cal.mm" style="${TS(digit,th.text,700,0,'line-height:1')}"></span>
+      <span style="${TS(digit,th.muted,700,0,'line-height:1')}">:</span>
+      <span data-k="cal.ss" style="${TS(digit,th.cpu,700,0,'line-height:1')}"></span>
+    </div>`;
+  // Year / month / day, with the weekday pinned to the trailing edge. The band
+  // shape has no room for a caption row of its own, so there the caption rides
+  // along on this same line.
+  const dateRow = `<div class="row" style="align-items:center;min-width:0;width:100%">
+      <span class="grow el nowrap" data-k="cal.date" style="${TS(F(11),th.text,700,1.3)};min-width:0"></span>
+      <span style="width:${P(10)}px;flex:0 0 auto"></span>
+      <span class="nowrap" data-k="cal.weekday" style="${TS(F(10),th.cpu,700,1.1)}"></span>
+      ${compact?`<span style="width:${P(10)}px;flex:0 0 auto"></span><span class="nowrap" style="${TS(F(9),th.muted,400,.9)}">LOCAL / 24H</span>`:''}
+    </div>`;
+  const calendar = `<div style="width:${calW}px;flex:0 0 auto;align-self:stretch;display:flex;flex-direction:column;justify-content:center;padding:${P(6)}px 0;background:${th.panelAlt};border:1px solid ${th.border};border-radius:${m.radius*0.6}px;text-align:center${compact?';overflow:hidden':''}">
+      <div data-k="cal.month" style="${TS(F(11),th.cpu,700,1.2)}"></div>
+      <div data-k="cal.day" style="${TS(F(26),th.text,700,0,'line-height:1.05')}"></div>
+    </div>`;
+  const inner = compact
+    // Short and wide: a single date line above the digits is all that fits.
+    ? `<div class="row" style="align-items:stretch;height:100%">
+        ${calendar}
+        <span style="width:${P(12)}px;flex:0 0 auto"></span>
+        <div class="grow col" style="justify-content:center;min-width:0;gap:${gap}px">
+          ${dateRow}
+          <div class="grow row" style="min-height:0;min-width:0;align-items:center">${digits}</div>
+        </div>
+      </div>`
+    : `<div class="row" style="align-items:center;height:100%">
+        ${calendar}
+        <span style="width:${P(12)}px"></span>
+        <div class="grow col" style="justify-content:center;min-width:0;gap:${gap}px">
+          ${dateRow}
+          ${digits}
+          <div style="${TS(F(9),th.muted,400,.9)}">LOCAL / 24H</div>
+        </div>
+      </div>`;
+  return panel({
+    radius:m.radius, accent:hexA(th.cpu,0.5), pad:`${m.padding}px`, fill:!!fill, sem:'Local time',
+    children:inner
+  });
+}
+
+/* ---------------------- data derivation ---------------------- */
+function derive(){
+  const gpu=selectedGpu();
+  const eng=selectedEngine();
+  const m=MM();
+  const gpuTag = eng ? ('MAX / '+clampName(eng.name,24)) : 'TOTAL';
+  const gpuUsage = eng?eng.usage:(gpu?gpu.engines[0]?.usage||0:0);
+  return {
+    cpuTag:'ALL CORES',
+    cpuModel: wrapModel(clampName('Intel Core i9-14900K',48), Math.round(74*m.scale)),
+    gpuTag,
+    gpuModel: gpu? wrapModel(clampName(gpu.name,48), Math.round(74*m.scale)) : 'No GPU',
+    cpuUsage: W.cpuUsage,
+    gpuUsage,
+    cpuDetail:`${fmtTempShort(W.cpuTemp,!W.hidden)} C   /   ${fmtPowerShort(W.cpuPower,!W.hidden)} W`,
+    gpuDetail: gpu? `${fmtTempShort(gpu.temp,true)} C   /   ${fmtPowerShort(gpu.power,true)} W` : '-- C   /   -- W',
+    cpuDetailHot: !W.hidden && isHot(W.cpuTemp,true),
+    gpuDetailHot: gpu? isHot(gpu.temp,true):false,
+  };
+}
+
+/* ---------------------- host discovery / pairing ---------------------- */
+/** Stand-ins for what a probe would return on a real Wi-Fi network.
+ *
+ *  The firmware has no equivalent screen: an ESP32 is paired once over USB and
+ *  then silently re-discovers its host. A phone has no USB path and no
+ *  pre-shared secret, so this page *is* the provisioning flow. Mirrors
+ *  `lib/screens/host_connect_screen.dart`. */
+const HOSTS=[
+  {id:'6f1c3f6e-6a1f-4a4c-9c3e-2b8a5d7e9f01', name:'DESKTOP-7F2A',       ip:'192.168.1.24',  port:8765, open:true,  paired:false},
+  {id:'b41d9c02-7e55-4f18-9a6d-3c7f1e2b8a44', name:'RIG-2 / WORKSTATION', ip:'192.168.1.87',  port:8765, open:false, paired:true },
+  {id:'a7f3e1b6-2c48-4d90-8b17-5e9c4a6d2f33', name:'MEDIA-CENTER',        ip:'192.168.1.132', port:8765, open:false, paired:false},
+];
+
+const hostList = ()=> S.hostEmpty ? [] : HOSTS;
+const hostAt   = i => hostList()[i] || null;
+
+/** Seeded from the fixture: the page opens in the situation the design was
+ *  reviewed in - already paired with RIG-2, currently looking for it. */
+S.peerId = (HOSTS.find(h=>h.paired)||{}).id || null;
+
+/** The PC this phone holds a pairing secret for. This is the app's `_paired`:
+ *  persisted in `PairingStore`, and deliberately **not** derived from the
+ *  connection state. A phone that remembers a PC still offers CONNECT / Forget
+ *  / Reconnect on a cold start, before the first scan has returned anything -
+ *  and just as importantly, still offers them while a scan is running. */
+const rememberedHost = ()=> HOSTS.find(h=>h.id===S.peerId) || null;
+
+/** The PC this phone is linked (or linking) with *right now*. Drives the live
+ *  vocabulary only - the header sentence, the LINKED card, the radar lock. */
+function pairedHost(){
+  return ['online','offline','connecting'].includes(S.hostState) ? hostAt(S.hostIndex) : null;
+}
+/** The PC that is showing its owner a confirmation dialog right now. */
+function awaitingHost(){
+  return S.hostState==='requesting' ? hostAt(S.hostIndex) : null;
+}
+
+function hostStateColor(){
+  const th=T();
+  if(S.hostState==='online') return th.gpu;
+  if(['requesting','offline','failed'].includes(S.hostState)) return th.hot;
+  return th.cpu;
+}
+const HOST_BADGE={idle:'IDLE',scanning:'SCANNING',found:'FOUND',requesting:'CONFIRM',
+                  connecting:'LINKING',online:'LIVE',offline:'OFFLINE',failed:'ERROR'};
+const hostStateBadge = ()=> HOST_BADGE[S.hostState]||'IDLE';
+
+function hostStateMessage(){
+  switch(S.hostState){
+    case 'idle':       return 'Press SCAN to look for a PC';
+    case 'scanning':   return 'Broadcasting discovery.probe on udp/8766';
+    case 'found':      return 'PC found - pick one below';
+    case 'requesting': return 'Confirm this device on the PC';
+    case 'connecting': return 'Opening the telemetry socket';
+    case 'online':     return 'Streaming telemetry from '+((pairedHost()||{}).name||'the PC');
+    case 'offline':    return 'The link dropped - retrying';
+    case 'failed':     return S.hostError;
+  }
+  return '';
+}
+function hostStateCaption(){
+  switch(S.hostState){
+    case 'idle':       return 'Press SCAN to look for a PC on this network.';
+    case 'scanning':   return 'Broadcasting on the local network. A PC running PCMonitorHost answers when "LAN pairing" is enabled in its settings.';
+    case 'found':      return 'Pick a PC below. One you have not paired with will ask its owner to confirm.';
+    case 'requesting': return 'Confirm this device on the PC. Nothing is shared until you do.';
+    case 'connecting': return 'Opening the telemetry socket and verifying the pairing secret.';
+    case 'online':     return 'Link established. The PC is streaming telemetry.';
+    case 'offline':    return 'The link dropped. Retrying in the background.';
+    case 'failed':     return S.hostError;
+  }
+  return '';
+}
+
+/** Bearing and range both come from a hash of the host id, so a host keeps its
+ *  place on the dial between repaints instead of teleporting. Same trick as
+ *  `_RadarPanel._blipFor` in the Flutter screen. */
+function hostHash(id){
+  let h=0;
+  for(const ch of String(id)) h=(h*31+ch.charCodeAt(0))&0x7FFFFFFF;
+  return h;
+}
+function radarBlips(){
+  const paired=pairedHost();
+  return hostList().map(h=>{
+    const hash=hostHash(h.id);
+    const locked=!!paired && paired.id===h.id;
+    return {
+      angle:(hash%360)*Math.PI/180,
+      range: locked ? 0.22 : 0.45+(hash%45)/100,
+      isPaired: h.paired || (!!paired && paired.id===h.id),
+      locked,
+    };
+  });
+}
+function radarHtml(){
+  const th=T();
+  const accent=hostStateColor();
+  let g='';
+  for(let i=1;i<=4;i++){
+    g+=`<circle cx="50" cy="50" r="${(48*i/4).toFixed(2)}" fill="none" stroke="${hexA(th.border,0.9)}" stroke-width="0.4"/>`;
+  }
+  g+=`<line x1="2" y1="50" x2="98" y2="50" stroke="${hexA(th.border,0.55)}" stroke-width="0.3"/>`;
+  g+=`<line x1="50" y1="2" x2="50" y2="98" stroke="${hexA(th.border,0.55)}" stroke-width="0.3"/>`;
+  radarBlips().forEach(b=>{
+    const x=(50+Math.cos(b.angle)*48*b.range).toFixed(2);
+    const y=(50+Math.sin(b.angle)*48*b.range).toFixed(2);
+    const c=b.isPaired?th.gpu:th.hot;
+    g+=`<circle cx="${x}" cy="${y}" r="${b.locked?2.6:2.0}" fill="${c}" opacity="0.42"/>`;
+    g+=`<circle cx="${x}" cy="${y}" r="${b.locked?1.45:1.05}" fill="${c}"/>`;
+    if(b.locked) g+=`<circle cx="${x}" cy="${y}" r="4.4" fill="none" stroke="${hexA(c,0.7)}" stroke-width="0.5"/>`;
+  });
+  if(pairedHost()) g+=`<circle cx="50" cy="50" r="48" fill="none" stroke="${hexA(th.gpu,0.8)}" stroke-width="0.7"/>`;
+  // The sweep is a conic wedge behind the graticule; the CSS animation only
+  // exists in the browser, and `prefers-reduced-motion` turns it off.
+  const sweep = S.hostState==='scanning'
+    ? `<div class="radarsweep" style="background:conic-gradient(from 0deg,${hexA(accent,0)} 0deg,${hexA(accent,0)} 258deg,${hexA(accent,0.10)} 300deg,${hexA(accent,0.30)} 356deg,${hexA(accent,0.55)} 360deg)"></div>`
+    : '';
+  return `<div class="radar">${sweep}<svg viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet">${g}</svg></div>`;
+}
+
+const icoPhone=(c,s)=>`<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="2" stroke-linecap="round"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M11 18.5h2"/></svg>`;
+const icoEdit =(c,s)=>`<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="2" stroke-linecap="round"><path d="M4 20h4L19 9l-4-4L4 16v4z"/><path d="M14.5 5.5l4 4"/></svg>`;
+
+/** The chamfered HUD button from `lib/widgets/hud.dart`. */
+function hudButton(label,o){
+  o=o||{};
+  const th=T();
+  const cut=Math.round(th.cut*M.scale*0.6);
+  const accent=o.accent||th.border;
+  const fg=o.dim?hexA(th.muted,0.65):(o.accent||th.text);
+  const bg=o.filled?hexA(o.accent||th.border,0.16):'transparent';
+  const glow=o.filled?`box-shadow:0 0 12px ${hexA(o.accent||accent,0.3)};`:'';
+  // A dimmed button keeps its `data-click`. `HudButton(onPressed: null)` leaves
+  // the button in the tree and only stops it reacting, so the prototype does the
+  // same: the attribute stays (the control is still there to be seen), and the
+  // action itself refuses to run while busy - see `nav.scan`.
+  const clickAttr = o.click==null ? '' : ` data-click="${o.click}"`;
+  return `<div${clickAttr} title="${esc(o.sem||label)}"
+    style="position:relative;display:inline-flex;align-items:center;height:100%;box-sizing:border-box;padding:0 ${P(14)}px;
+      background:${bg};${clipCut(cut)}${glow}cursor:${o.dim?'default':'pointer'}">
+    <span style="position:absolute;inset:0;border:1px solid ${hexA(accent,o.dim?0.4:0.8)};${clipCut(cut)};pointer-events:none"></span>
+    <span style="position:relative;${TS(F(10.5),fg,700,0.9)}">${esc(label)}</span>
+  </div>`;
+}
+
+function hostHeaderHtml(){
+  const th=T();
+  const c=hostStateColor();
+  return panel({
+    radius:M.radius, accent:hexA(c,0.55), cut:Math.round(th.cut*M.scale),
+    pad:`${P(11)}px ${P(14)}px`,
+    children:`<div class="row" style="align-items:center">
+      <span style="flex:0 0 auto;width:${P(8)}px;height:${P(8)}px;border-radius:50%;background:${c};box-shadow:0 0 9px ${hexA(c,0.6)}"></span>
+      <span style="flex:0 0 auto;width:${P(9)}px"></span>
+      <span class="grow col" style="min-width:0">
+        <span class="el nowrap" style="${TS(F(13),th.text,700,2.0)}">HOST LINK</span>
+        <span class="el nowrap" style="${TS(F(9.5),th.muted,400,0.7,'margin-top:'+P(3)+'px')}">${esc(hostStateMessage().toUpperCase())}</span>
+      </span>
+      <span style="flex:0 0 auto;width:${P(8)}px"></span>
+      ${badge(hostStateBadge(), c, F(10), null, null, S.hostState==='online')}
+    </div>`,
+  });
+}
+
+function radarPanelHtml(){
+  const th=T();
+  const accent=hostStateColor();
+  const sweeping=S.hostState==='scanning';
+  return panel({
+    radius:M.radius, accent:hexA(accent,0.5), cut:Math.round(th.cut*M.scale),
+    fill:true, pad:`${M.padding}px`,
+    children:`<div class="col" style="height:100%;min-height:0">
+      <div class="row" style="align-items:center;flex:0 0 auto">
+        <span class="grow el nowrap" style="${TS(F(9.5),th.muted,700,1.6)}">LAN SCAN</span>
+        ${badge(sweeping?'SWEEPING':`${hostList().length} FOUND`, accent, F(9))}
+      </div>
+      <div style="flex:1;min-height:0;display:flex;align-items:center;justify-content:center;padding:${P(8)}px 0">
+        ${radarHtml()}
+      </div>
+      <div style="flex:0 0 auto;${TS(F(9),th.muted,400,0.4,'line-height:1.35')}">${esc(hostStateCaption())}</div>
+    </div>`,
+  });
+}
+
+function hostCardHtml(h,i){
+  const th=T();
+  const paired=pairedHost();
+  const remembered=rememberedHost();
+  const active = S.hostState==='online' && !!paired && paired.id===h.id;
+  const awaiting = S.hostState==='requesting' && (awaitingHost()||{}).id===h.id;
+  const isPaired = !!remembered && remembered.id===h.id;
+  const accent = active ? th.gpu : (isPaired ? th.vram : (h.open ? th.cpu : th.muted));
+  const action = active ? 'LINKED' : (awaiting ? 'WAITING' : (isPaired ? 'CONNECT' : (h.open ? 'PAIR' : 'LOCKED')));
+
+  return panel({
+    radius:M.radius, accent:hexA(accent, active?0.85:0.5), glow:active?0.8:0,
+    fill:true, onclick: active?null:`host:${i}`,
+    sem:`${h.name}, ${h.ip}:${h.port}, ${action}`,
+    pad:`${P(10)}px ${M.padding}px`,
+    children:`<div class="row" style="align-items:center;height:100%">
+      ${chip(accent, 3, P(30))}
+      <span style="flex:0 0 auto;width:${P(11)}px"></span>
+      <span class="grow col" style="min-width:0;justify-content:center">
+        <span class="el nowrap" style="${TS(F(14),th.text,700,0.8)}">${esc((h.name||'PC MONITOR HOST').toUpperCase())}</span>
+        <span class="el nowrap" style="${TS(F(10.5),th.muted,400,0.8,'margin-top:'+P(3)+'px')}">${esc(h.ip+':'+h.port)}</span>
+        <span style="margin-top:${P(5)}px">${isPaired
+          ? badge('PAIRED', th.vram, F(8.5))
+          : badge(h.open?'PAIRING OPEN':'PAIRING CLOSED', h.open?th.cpu:th.muted, F(8.5))}</span>
+      </span>
+      <span style="flex:0 0 auto;width:${P(8)}px"></span>
+      ${awaiting
+        ? `<span class="spin" style="flex:0 0 auto;width:${P(16)}px;height:${P(16)}px;border-radius:50%;
+             border:2px solid ${hexA(accent,0.25)};border-top-color:${accent}"></span>`
+        : badge(action, accent, F(9.5), null, null, active)}
+    </div>`,
+  });
+}
+
+function hostListHtml(){
+  const th=T();
+  const hosts=hostList();
+  if(!hosts.length){
+    return panel({
+      radius:M.radius, accent:th.border, fill:true, pad:`${M.padding}px`,
+      children:`<div style="height:100%;display:flex;align-items:center;justify-content:center">
+        <span style="${TS(F(10),th.muted,600,1.4,'text-align:center')}">${S.hostState==='scanning'?'LISTENING FOR BROADCASTS...':'NO PCS LISTED YET'}</span>
+      </div>`,
+    });
+  }
+  // Rows share the height, bounded so one host is not blown up into a banner
+  // and a long list still scrolls inside its own panel.
+  const rowH=clamp(VIEW.h*0.6/hosts.length, P(72), P(150));
+  return `<div class="growY col" style="gap:${M.gutter}px">`+
+    hosts.map((h,i)=>`<div style="height:${rowH}px;flex:0 0 auto">${hostCardHtml(h,i)}</div>`).join('')+
+    `</div>`;
+}
+
+function deviceRowHtml(){
+  const th=T();
+  const isPaired=!!rememberedHost();
+  return panel({
+    radius:M.radius, accent:hexA(isPaired?th.gpu:th.border,0.45),
+    pad:`${P(10)}px ${M.padding}px`,
+    children:`<div class="row" style="align-items:center">
+      <span style="flex:0 0 auto;display:flex">${icoPhone(th.cpu, P(16))}</span>
+      <span style="flex:0 0 auto;width:${P(9)}px"></span>
+      <span class="grow col" style="min-width:0">
+        <span class="el nowrap" style="${TS(F(8.5),th.muted,600,1.2)}">THIS DEVICE</span>
+        <span class="el nowrap" style="${TS(F(12),th.text,600,0,'margin-top:'+P(2)+'px')}">${esc(S.deviceName)}</span>
+      </span>
+      <span style="flex:0 0 auto;width:${P(8)}px"></span>
+      <span data-click="rename" title="Rename this device" style="flex:0 0 auto;display:flex;cursor:pointer">${icoEdit(th.cpu, P(16))}</span>
+    </div>`,
+  });
+}
+
+function hostActionsHtml(){
+  const th=T();
+  const busy=['scanning','requesting','connecting'].includes(S.hostState);
+  // Gated on the *remembered* PC, not on the live link: `HostConnectionController`
+  // reads `c.pairedHost` (the persisted record) here, so Forget/Reconnect stay
+  // on screen while scanning or waiting for the PC's owner to confirm.
+  const isPaired=!!rememberedHost();
+  const h=P(38);
+  const b=[];
+  const add=(label,o)=>{ o=o||{}; b.push(`<div style="height:${h}px;flex:0 0 auto">${hudButton(label,o)}</div>`); };
+
+  add(S.hostState==='online'?'Rescan':'Scan', {click:'rescan', dim:busy});
+  if(isPaired && S.hostState!=='online') add('Reconnect', {click:'reconnect'});
+  if(isPaired) add('Forget', {click:'forget', accent:th.hot});
+  if(S.hostState==='requesting') add('Cancel', {click:'cancel'});
+  if(S.hostState==='online'){
+    add('Dashboard', {click:'home', filled:true, accent:th.gpu});
+    add('Disconnect', {click:'disconnect'});
+  }
+  if(S.hostState!=='online') add('Demo data', {click:'simulate', accent:th.vram});
+
+  return `<div class="row" style="height:${h}px;flex:0 0 auto;gap:${P(8)}px;overflow:hidden">${b.join('')}</div>`;
+}
+
+function hostsHtml(){
+  const pad=`${M.pagePadding}px`;
+  const header=hostHeaderHtml();
+  // `grow` (not a bare div) on the wrapper: without flex:1 the wrapper sizes to
+  // its content and the `growY` list inside never learns it should scroll - on
+  // a short viewport the cards then run over the action bar.
+  const list=`<div class="grow col" style="min-width:0">${hostListHtml()}</div>`;
+
+  if(M.isWide){
+    return `<div class="col" style="flex:1;min-height:0;padding:${pad};gap:${M.gutter}px">
+      ${header}
+      <div class="row" style="flex:1;min-height:0;gap:${M.gutter}px">
+        <div class="col" style="flex:4;min-width:0;min-height:0;gap:${M.gutter}px">
+          <div class="grow" style="min-height:0">${radarPanelHtml()}</div>
+          ${deviceRowHtml()}
+        </div>
+        <div class="col" style="flex:6;min-width:0;min-height:0">${list}</div>
+      </div>
+      ${hostActionsHtml()}
+    </div>`;
+  }
+
+  // Portrait: scanner on top, list filling the middle, actions last. The
+  // scanner keeps a 1:1 aspect ratio but yields when the viewport is short.
+  return `<div class="col" style="flex:1;min-height:0;padding:${pad};gap:${M.gutter}px">
+    ${header}
+    <div style="flex:42 1 0;min-height:0;display:flex;align-items:center;justify-content:center">
+      <div style="height:100%;aspect-ratio:1;max-width:100%">${radarPanelHtml()}</div>
+    </div>
+    <div class="col" style="flex:58 1 0;min-height:0">${list}</div>
+    ${deviceRowHtml()}
+    ${hostActionsHtml()}
+  </div>`;
+}
+
+/* ---------------------- dashboard ---------------------- */
+/** Height the dashboard body actually receives, i.e. the viewport minus the
+ *  status block. Only used to choose the compression factor - the flexbox does
+ *  the real distribution. */
+function dashAvailable(){
+  const content = Math.max(F(20), F(11)*1.2 + P(2) + F(9)*1.2);
+  const statusBlock = M.gutter + M.gutter*0.6 + (P(9)*2 + content);
+  return Math.max(0, VIEW.h - statusBlock - M.gutter*2);
+}
+
+function dashboardHtml(){
+  DM=null;
+  const th=T();
+  const compactVariant = M.variant==='compactStack'||M.variant==='splitColumns';
+  const pad=`${M.pagePadding}px`;
+  const status = `<div style="padding:${M.gutter}px ${pad} ${M.gutter*0.6}px">${statusBarHtml()}</div>`;
+
+  if(compactVariant){
+    // The portrait dashboard FILLS the viewport - it never scrolls. Pairing
+    // RAM/VRAM and NET/DISK side by side is what buys back the height that used
+    // to overflow, and if the column is still over budget every metric is
+    // compressed to match. Mirrors `_CompactDashboard` on the Flutter side.
+    const CARD=210, TILE=92, GAP=10, CLOCK=TILE;
+    const innerW = M.vw - 2*M.pagePadding;
+    const twoUp = (innerW/2) >= 160*M.scale;
+    const bandUnits = twoUp ? TILE : TILE*2;
+    const gapCount  = twoUp ? 4 : 6;
+    const gapUnits  = GAP*gapCount;
+    const nominal = (2*CARD + 2*bandUnits + CLOCK + gapUnits)*M.scale;
+    const avail = dashAvailable();
+    DM = compressMetrics(M, avail/nominal);
+    const m = DM;
+    // The clock band is one tile tall and spans the column, so its digits can
+    // be sized against the height it will really get (the flexbox does the rest
+    // of the distribution).
+    const clockH = Math.max(0, avail - gapCount*m.gutter) *
+                   CLOCK/(2*CARD + 2*bandUnits + CLOCK);
+
+    const band=(a,b)=> twoUp
+      ? `<div class="row" style="flex:${bandUnits} 1 0;min-height:0;gap:${m.gutter}px">
+           <div class="grow col" style="min-height:0">${a}</div>
+           <div class="grow col" style="min-height:0">${b}</div>
+         </div>`
+      : `<div class="col" style="flex:${bandUnits} 1 0;min-height:0;gap:${m.gutter}px">
+           <div class="grow col" style="min-height:0">${a}</div>
+           <div class="grow col" style="min-height:0">${b}</div>
+         </div>`;
+
+    const body=`<div class="grow col" style="min-height:0;padding:0 ${m.pagePadding}px ${m.gutter*2}px;gap:${m.gutter}px">
+      <div class="grow col" style="flex:${CARD} 1 0;min-height:0">${processorCardHtml('cpu',true)}</div>
+      <div class="grow col" style="flex:${CARD} 1 0;min-height:0">${processorCardHtml('gpu',true)}</div>
+      <div class="grow col" style="flex:${CLOCK} 1 0;min-height:0">${clockCardHtml(true,true,clockH)}</div>
+      ${band(memoryTileHtml('ram',true), memoryTileHtml('vram',true))}
+      ${band(ioTileHtml('net',true), ioTileHtml('disk',true))}
+    </div>`;
+    DM=null;
+    return status+body;
+  }
+
+  // grid layouts
+  const contentW = M.vw - 2*M.pagePadding;
+  const threeColumns = M.variant==='gridExtraWide' && contentW > 900*M.scale;
+
+  const processors=`<div class="row" style="flex:11 1 0;min-height:0;gap:${M.gutter}px">
+      <div class="grow col" style="min-width:0">${processorCardHtml('cpu',true)}</div>
+      <div class="grow col" style="min-width:0">${processorCardHtml('gpu',true)}</div>
+      ${threeColumns?`<div class="grow col" style="min-width:0">${clockCardHtml(true)}</div>`:''}
+    </div>`;
+
+  let lower;
+  if(threeColumns){
+    lower=`<div class="row" style="flex:7 1 0;min-height:0;gap:${M.gutter}px">
+      <div class="grow col" style="min-width:0">${memoryTileHtml('ram',true)}</div>
+      <div class="grow col" style="min-width:0">${memoryTileHtml('vram',true)}</div>
+      <div class="grow col" style="min-width:0">${ioTileHtml('net',true)}</div>
+      <div class="grow col" style="min-width:0">${ioTileHtml('disk',true)}</div>
+    </div>`;
+  }else{
+    lower=`<div class="row" style="flex:7 1 0;min-height:0;gap:${M.gutter}px">
+      <div class="grow col" style="min-width:0">${clockCardHtml(true)}</div>
+      <div class="grow col" style="min-width:0;gap:${M.gutter}px">
+        <div class="grow" style="min-height:0">${memoryTileHtml('ram',true)}</div>
+        <div class="grow" style="min-height:0">${memoryTileHtml('vram',true)}</div>
+      </div>
+      <div class="grow col" style="min-width:0;gap:${M.gutter}px">
+        <div class="grow" style="min-height:0">${ioTileHtml('net',true)}</div>
+        <div class="grow" style="min-height:0">${ioTileHtml('disk',true)}</div>
+      </div>
+    </div>`;
+  }
+
+  const body=`<div class="grow col" style="min-height:0;padding:0 ${pad} ${M.gutter}px;gap:${M.gutter}px">
+    ${processors}${lower}
+  </div>`;
+  return status+body;
+}
+
+/* ---------------------- scaffold (detail pages) ---------------------- */
+function scaffoldHtml(o){
+  const th=T();
+  const rail = M.hasSideRail ? `<div style="width:${M.railWidth}px;flex:0 0 auto;margin:4px 0 4px 4px;border-right:1px solid ${th.border};
+      display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px">
+      <svg width="${M.railWidth*0.4}" height="${M.railWidth*0.4}" viewBox="0 0 24 24" fill="none" stroke="${o.accent}" stroke-width="2">
+        <rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6v6H9z"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3"/>
+      </svg>
+      <span style="${TS(9,th.muted,700,1.0)}">MON</span>
+    </div>` : '';
+
+  return `<div class="col" style="flex:1;min-height:0">
+    <div class="row" style="height:${M.headerHeight}px;flex:0 0 auto;align-items:center;padding:0 ${M.pagePadding}px">
+      ${o.leading||''}
+      ${o.leading?`<span style="width:${M.gutter}px"></span>`:''}
+      ${chip(o.accent, 3*clamp(M.scale,0.8,1.6), F(20))}
+      <span style="width:10px"></span>
+      <span class="grow col" style="justify-content:center;min-width:0">
+        <span class="el nowrap" style="${TS(F(18),th.text,700,1.6)}">${esc(o.title)}</span>
+        ${o.subtitle?`<span class="el nowrap" style="${TS(F(10),th.muted,600,1.0)}">${esc(String(o.subtitle).toUpperCase())}</span>`:''}
+      </span>
+      ${(o.actions||[]).join(`<span style="width:${P(8)}px"></span>`)}
+    </div>
+    <div class="row grow" style="min-height:0">
+      ${rail}
+      <div class="grow col" style="min-width:0;min-height:0">${o.body}</div>
+    </div>
+  </div>`;
+}
+function backButton(label,color,action){
+  return panel({
+    radius:M.radius*0.7, pad:`${P(7)}px ${P(10)}px`, onclick:action, sem:'Back to '+label,
+    children:`<div class="row" style="align-items:center;white-space:nowrap">
+      <span style="color:${color};font-size:${F(16)}px;line-height:1;margin-right:${P(2)}px">‹</span>
+      <span style="${TS(F(11),color,700,.8)}">${label}</span>
+    </div>`
+  });
+}
+function sectionHeader(title,accent,trailing){
+  const th=T();
+  return `<div class="row" style="align-items:center">
+    ${chip(accent,3,F(11)+2)}
+    <span style="width:8px"></span>
+    <span class="grow el nowrap" style="${TS(F(11),th.muted,700,1.2)}">${esc(String(title).toUpperCase())}</span>
+    ${trailing?`<span style="${TS(F(10),th.muted,700,.8)}">${esc(trailing)}</span>`:''}
+  </div>`;
+}
+function metricLine(label,key,color,valueSize,labelSize){
+  const th=T();
+  return `<div class="col" style="min-width:0">
+    <div class="el nowrap" style="${TS(labelSize||F(10),th.muted,600,.9)}">${esc(String(label).toUpperCase())}</div>
+    <div style="height:4px"></div>
+    <div data-k="${key}" class="el nowrap" style="${TS(valueSize||F(14),color||th.text,600,0)}"></div>
+  </div>`;
+}
+
+/* ---------------------- CPU detail ---------------------- */
+function cpuDetailHtml(){
+  const th=T();
+  // Columns follow the AVAILABLE WIDTH, not the short side - otherwise a
+  // landscape phone (852 wide) would wrap five numbers into two cramped rows.
+  const innerW = M.vw - 2*M.pagePadding - 2*M.padding;
+  const cols = clamp(Math.floor(innerW/(150*M.scale)),2,5);
+  const tiles=[
+    metricLine('Total load','cpu2.load',th.text,F(22)),
+    metricLine('Temperature','cpu2.temp',th.text,F(15)),
+    metricLine('Power','cpu2.power',th.text,F(15)),
+    metricLine('Frequency','cpu2.freq',th.cpu,F(15)),
+    metricLine('Threads','cpu2.threads',th.text,F(15)),
+  ];
+  const block = panel({
+    radius:M.radius, accent:hexA(th.cpu,0.5), pad:`${M.padding}px`,
+    children:`<div class="col" style="gap:${M.gutter*0.7}px">
+      <div style="display:grid;grid-template-columns:repeat(${cols},minmax(0,1fr));gap:${M.gutter*0.5}px ${M.gutter}px">${tiles.join('')}</div>
+      ${bar({k:'cpu2.bar',value:0,color:th.cpu,valid:true,h:P(6),gradientTo:hexA(th.cpu,0.6)})}
+    </div>`
+  });
+
+  const n = 32;
+  const coreCols = listColumns(M.vw-2*M.pagePadding, M.vw<380?130:150);
+  const rowH = 46*clamp(M.scale,0.85,1.6);
+  const cores = Array.from({length:n},(_,i)=>coreRowHtml(i)).join('');
+
+  const body=`<div class="col" style="min-height:0;padding:0 ${M.pagePadding}px ${M.gutter}px;gap:${M.gutter*0.8}px">
+    ${block}
+    ${sectionHeader('Logical cores / threads',th.cpu,'32 TOTAL')}
+    <div class="growY" style="min-height:0">
+      <div style="display:grid;grid-template-columns:repeat(${coreCols},minmax(0,1fr));gap:${M.gutter*0.75}px ${M.gutter}px;grid-auto-rows:${rowH}px;padding-bottom:${M.gutter}px">
+        ${cores}
+      </div>
+    </div>
+  </div>`;
+
+  return scaffoldHtml({
+    title:'CPU / DETAIL', subtitle:'Intel Core i9-14900K', accent:th.cpu,
+    leading:backButton('HOME',th.text,'home'),
+    actions:[`<span style="${TS(F(9),th.muted,400,.8)}">${M.cls.toUpperCase()} / ${M.portrait?'PORTRAIT':'LANDSCAPE'}</span>`],
+    body
+  });
+}
+function coreRowHtml(i){
+  const th=T();
+  return panel({
+    radius:M.radius*0.65, accent:th.border, pad:`${P(8)}px ${P(10)}px`, sem:'Core '+i,
+    children:`<div class="col" style="justify-content:center;height:100%">
+      <div class="row" style="align-items:center">
+        <span class="grow el nowrap" style="${TS(F(11),th.muted,600,0)};min-width:0">Core ${i}</span>
+        <span data-k="core.${i}.val" style="${TS(F(12),th.text,700,0)}"></span>
+      </div>
+      <div style="height:${P(6)}px"></div>
+      ${bar({k:'core.'+i+'.bar',value:0,color:th.cpu,valid:true,h:P(4),glow:0.3})}
+    </div>`
+  });
+}
+
+/* ---------------------- GPU selector ---------------------- */
+function gpuSelectorHtml(){
+  const th=T();
+  const cols=cardColumns(M.vw-2*M.pagePadding);
+  const rows=Math.max(1,Math.ceil(W.gpus.length/cols));
+  // Distribute the spare viewport height across the rows so a short list
+  // still fills the screen; never exceed a sane maximum card height.
+  const minH=clamp(158*M.scale,132,230);
+  const gridH=VIEW.h - M.headerHeight - M.gutter*2;
+  const cardH=clamp((gridH - M.gutter*(rows-1))/rows, minH, 300);
+  const cards=W.gpus.map((g,i)=>gpuCardHtml(g,i)).join('');
+  const body=`<div class="growY" style="padding:0 ${M.pagePadding}px ${M.gutter}px">
+    <div style="display:flex;flex-direction:column;min-height:100%">
+      <div style="margin:auto 0;display:grid;grid-template-columns:repeat(${cols},minmax(0,1fr));gap:${M.gutter}px;grid-auto-rows:${cardH}px">
+        ${cards}
+      </div>
+    </div>
+  </div>`;
+  return scaffoldHtml({
+    title:'GPU / DEVICES',
+    subtitle:`${W.gpus.length} ADAPTERS / SELECT A GPU`,
+    accent:th.gpu,
+    leading:backButton('HOME',th.text,'home'),
+    body
+  });
+}
+function gpuCardHtml(g,i){
+  const th=T();
+  const isHome = i===S.gpuIndex;
+  const eng=busiestEngine(g);
+  const parts=[fmtPercent(eng?eng.usage:0,true), fmtTemp(g.temp,true,0), fmtPower(g.power,true)];
+  return panel({
+    radius:M.radius, accent:isHome?th.gpu:th.border, borderWidth:isHome?2:1, glow:isHome?0.7:0,
+    pad:`${M.padding}px`, fill:true, onclick:'gpu:'+i, sem:g.name,
+    children:`<div class="col" style="height:100%">
+      <div class="row" style="align-items:flex-start">
+        <span class="grow el" style="${TS(F(14),th.text,700,0,'line-height:1.2')};min-width:0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${esc(g.name)}</span>
+        <span style="width:${P(8)}px"></span>
+        ${isHome?badge('HOME',th.gpu,F(10)):''}
+      </div>
+      <div style="height:${P(6)}px"></div>
+      <div class="row" style="align-items:center">
+        ${badge(g.discrete?'DISCRETE':'INTEGRATED', g.discrete?th.gpu:th.muted, F(8), P(5), 2)}
+        <span style="width:${P(6)}px"></span>
+        <span class="grow el nowrap" style="${TS(F(9),th.muted,400,.8)};min-width:0">${esc(g.vendor.toUpperCase())}</span>
+        <span style="color:${th.muted};font-size:${P(16)}px;line-height:1">›</span>
+      </div>
+      <div class="grow" style="min-height:0;padding:${P(8)}px 0">
+        <canvas data-spark="gpuHistory:${i}" style="width:100%;height:100%;display:block"></canvas>
+      </div>
+      <div data-k="gsel.${i}.parts" class="el nowrap" style="${TS(F(16),th.gpu,700,0)}"></div>
+      <div style="height:${P(6)}px"></div>
+      <div data-k="gsel.${i}.peak" class="el nowrap" style="${TS(F(9),th.muted,400,.7)}"></div>
+      <div style="height:${P(10)}px"></div>
+      ${bar({k:'gsel.'+i+'.bar',value:0,color:th.gpu,valid:true,h:P(6),gradientTo:th.cpu})}
+    </div>`
+  });
+}
+
+/* ---------------------- GPU detail ---------------------- */
+function gpuDetailHtml(){
+  const th=T();
+  const idx=S.openGpu;
+  const g = (idx==null||idx>=W.gpus.length)?null:W.gpus[idx];
+  if(!g){
+    return scaffoldHtml({ title:'GPU / DETAIL', subtitle:'ADAPTER UNAVAILABLE', accent:th.gpu,
+      leading:backButton('HOME',th.text,'home'),
+      actions:[backButton('DEVICES',th.gpu,'devices')],
+      body:`<div class="grow col" style="align-items:center;justify-content:center">
+        <span style="${TS(F(13),th.muted,400,0)}">GPU unavailable / select another device</span></div>` });
+  }
+  const eng=busiestEngine(g);
+  // Same rule as the CPU page: columns follow available width, not short side.
+  const innerW = M.vw - 2*M.pagePadding - 2*M.padding;
+  const cols = clamp(Math.floor(innerW/(150*M.scale)),2,5);
+  const tiles=[
+    metricLine(eng?'Busiest engine':'Total load', `gdet.usage`, th.text, F(22)),
+    metricLine('Temperature','gdet.temp',th.text,F(15)),
+    metricLine('Power','gdet.power',th.text,F(15)),
+    metricLine('VRAM usage','gdet.vrampct',th.vram,F(15)),
+    metricLine('VRAM','gdet.vram',th.text,F(14)),
+  ];
+  const block=panel({
+    radius:M.radius, accent:hexA(th.gpu,0.5), pad:`${M.padding}px`,
+    children:`<div class="col" style="gap:${M.gutter*0.7}px">
+      <div style="display:grid;grid-template-columns:repeat(${cols},minmax(0,1fr));gap:${M.gutter*0.5}px ${M.gutter}px">${tiles.join('')}</div>
+      ${bar({k:'gdet.bar',value:0,color:th.gpu,valid:true,h:P(6),gradientTo:th.cpu})}
+      ${eng?`<div class="row" style="align-items:center">
+        <svg width="${P(14)}" height="${P(14)}" viewBox="0 0 24 24" fill="${th.gpu}"><path d="M13 2 3 14h7l-1 8 11-13h-7l1-7z"/></svg>
+        <span style="width:${P(4)}px"></span>
+        <span data-k="gdet.max" class="grow el nowrap" style="${TS(F(10),th.gpu,700,.9)};min-width:0"></span>
+      </div>`:''}
+    </div>`
+  });
+
+  const engCols=listColumns(M.vw-2*M.pagePadding, M.vw<380?140:160);
+  const rows=g.engines.map((e,i)=>engineRowHtml(i,e)).join('');
+  const body=`<div class="col" style="min-height:0;padding:0 ${M.pagePadding}px ${M.gutter}px;gap:${M.gutter*0.8}px">
+    ${block}
+    ${sectionHeader('Engine utilisation',th.gpu,`${g.engines.length} ENGINES`)}
+    <div class="growY" style="min-height:0">
+      <div style="display:grid;grid-template-columns:repeat(${engCols},minmax(0,1fr));gap:${M.gutter*0.75}px ${M.gutter}px;padding-bottom:${M.gutter}px">
+        ${rows}
+      </div>
+    </div>
+  </div>`;
+
+  return scaffoldHtml({
+    title:'GPU / DETAIL', subtitle:g.name, accent:th.gpu,
+    leading:backButton('HOME',th.text,'home'),
+    actions:[backButton('DEVICES',th.gpu,'devices')],
+    body
+  });
+}
+function engineRowHtml(i,e){
+  const th=T();
+  return panel({
+    radius:M.radius*0.65, accent:th.border, pad:`${P(8)}px ${P(10)}px`, sem:e.name,
+    children:`<div class="col" style="justify-content:center;height:100%">
+      <div class="row" style="align-items:center">
+        <span class="grow el nowrap" style="${TS(F(11),th.muted,600,0)};min-width:0">${esc(e.name)}</span>
+        <span data-k="eng.${i}.val" style="${TS(F(12),th.text,700,0)}"></span>
+      </div>
+      <div style="height:${P(6)}px"></div>
+      ${bar({k:'eng.'+i+'.bar',value:0,color:th.gpu,valid:true,h:P(4),glow:0.3})}
+    </div>`
+  });
+}
+
+/* ---------------------- Disk detail ---------------------- */
+function diskDetailHtml(){
+  const th=T();
+  const header=panel({
+    radius:M.radius, accent:hexA(th.cpu,0.5), pad:`${M.padding}px`,
+    children:`<div class="row" style="gap:${M.gutter}px">
+      <div class="grow col" style="min-width:0">${metricLine('Total read','dtot.r',th.cpu,F(16))}</div>
+      <div class="grow col" style="min-width:0">${metricLine('Total write','dtot.w',th.gpu,F(16))}</div>
+    </div>`
+  });
+  const cols=cardColumns(M.vw-2*M.pagePadding);
+  const rows=Math.max(1,Math.ceil(W.disks.length/cols));
+  // Header panel height (label + value + paddings) so the card grid can be
+  // sized to consume the remaining viewport exactly.
+  const headH=2*M.padding + F(10)*1.2 + 4 + F(16)*1.25;
+  const gridH=VIEW.h - M.headerHeight - headH - M.gutter*3;
+  const minH=clamp(136*M.scale,120,190);
+  const cardH=clamp((gridH - M.gutter*(rows-1))/rows, minH, 300);
+  const cards=W.disks.map((d,i)=>diskCardHtml(d,i)).join('');
+  const body=`<div class="col" style="min-height:0;padding:0 ${M.pagePadding}px ${M.gutter}px;gap:${M.gutter}px">
+    ${header}
+    <div class="growY" style="min-height:0">
+      <div style="display:flex;flex-direction:column;min-height:100%">
+        <div style="margin:auto 0;display:grid;grid-template-columns:repeat(${cols},minmax(0,1fr));gap:${M.gutter}px;grid-auto-rows:${cardH}px">
+          ${cards}
+        </div>
+      </div>
+    </div>
+  </div>`;
+  return scaffoldHtml({
+    title:'DISK / DETAIL', subtitle:`${W.disks.length} PHYSICAL DISKS / LIVE I/O`, accent:th.cpu,
+    leading:backButton('HOME',th.text,'home'), body
+  });
+}
+function diskCardHtml(d,i){
+  const th=T();
+  return panel({
+    radius:M.radius, accent:th.border, pad:`${M.padding}px`, fill:true, sem:d.name,
+    children:`<div class="col" style="height:100%;justify-content:space-between">
+      <div class="row" style="align-items:flex-start">
+        <svg width="${P(14)}" height="${P(14)}" viewBox="0 0 24 24" fill="none" stroke="${th.muted}" stroke-width="2" style="flex:0 0 auto;margin-top:2px">
+          <ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"/>
+        </svg>
+        <span style="width:${P(6)}px"></span>
+        <span class="grow el" style="${TS(F(13),th.text,700,0,'line-height:1.2')};min-width:0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${esc(d.name)}</span>
+      </div>
+      <div class="row" style="gap:${M.gutter}px">
+        <div class="grow col" style="min-width:0">${metricLine('Read','dsk.'+i+'.read',th.cpu,F(15))}</div>
+        <div class="grow col" style="min-width:0">${metricLine('Write','dsk.'+i+'.write',th.gpu,F(15))}</div>
+      </div>
+      <div>
+        <div class="row" style="align-items:center">
+          <span data-k="dsk.${i}.act" class="grow el nowrap" style="${TS(F(11),th.muted,400,0)};min-width:0"></span>
+          <span style="width:${P(8)}px"></span>
+          <span data-k="dsk.${i}.temp" class="el nowrap" style="${TS(F(11),th.muted,400,0)}"></span>
+        </div>
+        <div style="height:${P(8)}px"></div>
+        ${bar({k:'dsk.'+i+'.bar',value:0,color:th.cpu,valid:true,h:P(5),glow:0.35})}
+      </div>
+    </div>`
+  });
+}
+
+/* ---------------------- theme sheet ---------------------- */
+function sheetHtml(){
+  const th=T();
+  const tiles=THEMES.map(o=>{
+    const sel=o.id===S.themeId;
+    return `<div style="margin-bottom:${M.gutter*0.7}px">${panel({
+      radius:M.radius*0.7, accent: sel?o.cpu:th.border, borderWidth:sel?2:1, glow:sel?0.7:0,
+      onclick:'pick:'+o.id, sem:o.name+' theme', cls:'tile',
+      children:`<div class="row" style="align-items:center">
+        <span style="display:flex;flex-direction:column;width:${P(6)}px;height:${P(46)}px;flex:0 0 auto;border-radius:2px;overflow:hidden">
+          <span style="flex:1;background:${o.cpu}"></span><span style="flex:1;background:${o.gpu}"></span>
+          <span style="flex:1;background:${o.ram}"></span><span style="flex:1;background:${o.vram}"></span>
+          <span style="flex:1;background:${o.bg}"></span>
+        </span>
+        <span style="width:${P(12)}px"></span>
+        <span class="grow col" style="min-width:0">
+          <span class="el nowrap" style="${TS(F(14),o.text,700,.8)}">${esc(o.name)}</span>
+          <span style="height:2px"></span>
+          <span class="el nowrap" style="${TS(F(11),o.muted,400,0)}">${esc(o.desc)}</span>
+        </span>
+        ${sel?`<span style="color:${o.cpu};font-size:${P(18)}px;line-height:1">✓</span>`:''}
+      </div>`
+    })}</div>`;
+  }).join('');
+
+  return `<div id="sheet" class="open" data-click="closesheet">
+    <div style="padding:${M.gutter}px" data-stop="1">
+      ${panel({
+        radius:M.radius, accent:th.cpu, glow:0.5, pad:`${M.padding}px`,
+        children:`<div class="col">
+          <div class="row" style="align-items:center">
+            ${chip(th.cpu,3,F(14))}<span style="width:8px"></span>
+            <span style="${TS(F(13),th.text,700,1.4)}">INTERFACE THEME</span>
+            <span class="grow"></span>
+            <span data-click="closesheet" style="color:${th.muted};font-size:${P(18)}px;cursor:pointer;line-height:1;padding:0 ${P(4)}px">✕</span>
+          </div>
+          <div style="height:${P(6)}px"></div>
+          <div style="max-height:${M.vh*0.62}px;overflow-y:auto">${tiles}</div>
+        </div>`
+      })}
+    </div>
+  </div>`;
+}
+
+/* =========================================================================
+   10. paint — targeted updates, no DOM rebuild
+   ========================================================================= */
+function sparkCanvas(cv,points,color,thresholdColor,threshold){
+  const dpr=window.devicePixelRatio||1;
+  const w=cv.clientWidth, h=cv.clientHeight;
+  if(w<=0||h<=0) return;
+  if(cv.width!==Math.round(w*dpr)||cv.height!==Math.round(h*dpr)){
+    cv.width=Math.round(w*dpr); cv.height=Math.round(h*dpr);
+  }
+  const g=cv.getContext('2d');
+  g.setTransform(dpr,0,0,dpr,0,0);
+  g.clearRect(0,0,w,h);
+  if(points.length<2) return;
+
+  // grid: three lines at 1/4, 2/4, 3/4
+  g.strokeStyle=hexA(T().border,0.55); g.lineWidth=0.6;
+  for(let i=1;i<=3;i++){ const y=h*i/4; g.beginPath(); g.moveTo(0,y); g.lineTo(w,y); g.stroke(); }
+
+  const stepX=w/(points.length-1);
+  const yFor=v=>h-((clamp(v,0,100)-0)/100)*h;
+
+  // segments, breaking at nulls
+  const segs=[]; let cur=[];
+  points.forEach((v,i)=>{
+    if(v==null||!isFinite(v)){ if(cur.length){segs.push(cur);cur=[];} }
+    else cur.push([i*stepX,yFor(v),v]);
+  });
+  if(cur.length) segs.push(cur);
+
+  // area fill
+  segs.forEach(seg=>{
+    if(seg.length<2) return;
+    const grad=g.createLinearGradient(0,0,0,h);
+    grad.addColorStop(0,hexA(color,0.34)); grad.addColorStop(1,hexA(color,0.02));
+    g.beginPath(); g.moveTo(seg[0][0],h); seg.forEach(p=>g.lineTo(p[0],p[1]));
+    g.lineTo(seg[seg.length-1][0],h); g.closePath();
+    g.fillStyle=grad; g.fill();
+  });
+
+  const strokeSeg=(width,alpha,style)=>{
+    g.save();
+    g.lineWidth=width; g.lineJoin='round'; g.lineCap='round';
+    if(alpha!=null){ g.strokeStyle=style; g.globalAlpha=alpha; }
+    else { const lg=g.createLinearGradient(0,0,w,0); lg.addColorStop(0,color); lg.addColorStop(1,thresholdColor); g.strokeStyle=lg; }
+    segs.forEach(seg=>{
+      if(seg.length<2){ // single point: draw a dot
+        g.beginPath(); g.arc(seg[0][0],seg[0][1],width/2,0,Math.PI*2); g.fillStyle=g.strokeStyle; g.fill(); return; }
+      g.beginPath(); seg.forEach((p,i)=> i?g.lineTo(p[0],p[1]):g.moveTo(p[0],p[1])); g.stroke();
+    });
+    g.restore();
+  };
+  g.save(); g.filter='blur(3px)'; strokeSeg(1.4*2.6,null); g.restore();  // glow pass (blur via filter)
+  strokeSeg(1.4,null);                                                   // crisp stroke
+
+  // head marker on the newest valid sample
+  for(let i=points.length-1;i>=0;i--){
+    const v=points[i]; if(v==null||!isFinite(v)) continue;
+    const x=i*stepX, y=yFor(v);
+    const hc = v>=threshold ? thresholdColor : color;
+    g.fillStyle=hexA(hc,0.30); g.beginPath(); g.arc(x,y,3.4,0,Math.PI*2); g.fill();
+    g.fillStyle=hc;            g.beginPath(); g.arc(x,y,1.9,0,Math.PI*2); g.fill();
+    break;
+  }
+}
+
+function latest(list){ for(let i=list.length-1;i>=0;i--) if(list[i]!=null) return list[i]; return null; }
+
+function paint(){
+  const th=T();
+  const clock=clockFields(new Date());
+  const kind=connectionKind(), kc=kindColor(kind);
+
+  const set=(k,text)=>{ const el=dev.querySelector(`[data-k="${k}"]`); if(el) el.textContent=text; };
+  const setStyle=(k,prop,val)=>{ const el=dev.querySelector(`[data-k="${k}"]`); if(el) el.style[prop]=val; };
+  const setWidth=(k,frac)=>{ const el=dev.querySelector(`[data-bar="${k}"]`); if(el){ const inner=el.firstElementChild; if(inner) inner.style.width=(clamp(frac,0,1)*100).toFixed(2)+'%'; } };
+
+  /* ---- status bar ---- */
+  set('status.text', statusText().toUpperCase());
+  set('status.date', clock.valid ? `${clock.date}  ${clock.weekday}` : Ph.date);
+  const cb=dev.querySelector('[data-k="status.badge"]');
+  if(cb) cb.innerHTML=badge(kindBadge(kind),kc);
+  const dot=dev.querySelector('[data-k="dot"]');
+  if(dot){ dot.style.background=kc; dot.style.boxShadow=`0 0 8px ${hexA(kc,.6)}`; }
+  const clk=dev.querySelector('[data-k="status.clock"]');
+  if(clk){
+    const fs=F(20);
+    clk.innerHTML =
+      `<span style="${TS(fs,th.text,700,0,'line-height:1')}">${clock.hh}</span>`+
+      `<span style="${TS(fs*0.9,th.muted,700,0,'line-height:1')}">:</span>`+
+      `<span style="${TS(fs,th.text,700,0,'line-height:1')}">${clock.mm}</span>`+
+      `<span style="${TS(fs*0.9,th.muted,700,0,'line-height:1')}">:</span>`+
+      `<span style="${TS(fs*0.72,th.cpu,700,0,'line-height:1')}">${clock.ss}</span>`;
+  }
+
+  /* ---- clock card ---- */
+  set('cal.month',clock.month); set('cal.day',clock.day); set('cal.weekday',clock.weekday);
+  set('cal.date',clock.date);
+  set('cal.hh',clock.hh); set('cal.mm',clock.mm); set('cal.ss',clock.ss);
+
+  /* ---- dashboard ---- */
+  const d=derive();
+  set('cpu.tag',d.cpuTag); set('cpu.model',d.cpuModel);
+  set('cpu.num', d.cpuUsage==null?'--':String(W.cpuUsage));
+  set('cpu.detail',d.cpuDetail);
+  setStyle('cpu.detail','color', d.cpuDetailHot?th.hot:th.muted);
+  const cpuDisp=easeTo('cpu',W.cpuUsage,0.05,0.25,0.10);
+  setWidth('cpu.bar', cpuDisp/100);
+
+  set('gpu.tag',d.gpuTag); set('gpu.model',d.gpuModel);
+  set('gpu.num',String(d.gpuUsage));
+  set('gpu.detail',d.gpuDetail);
+  setStyle('gpu.detail','color', d.gpuDetailHot?th.hot:th.muted);
+  const gpuDisp=easeTo('gpu',d.gpuUsage,0.05,0.25,0.10);
+  setWidth('gpu.bar', gpuDisp/100);
+
+  const g0=selectedGpu();
+  const ramPct = Math.round((W.ramUsed/W.ramTotal)*100);
+  set('ram.pct', ramPct+'%');
+  set('ram.cap', fmtCapacityPair(W.ramUsed,true,W.ramTotal,true));
+  setWidth('ram.bar', easeTo('ram',ramPct,0.05,0.35,0.01)/100);
+
+  const vramPct = g0? Math.round((g0.vramUsed/g0.vramTotal)*100) : 0;
+  set('vram.pct', g0? vramPct+'%' : Ph.percent);
+  set('vram.cap', g0? fmtCapacityPair(g0.vramUsed,true,g0.vramTotal,true) : Ph.gib);
+  setWidth('vram.bar', easeTo('vram',vramPct,0.05,0.35,0.01)/100);
+
+  set('net.dl',fmtRate(W.netDown,true));
+  set('net.ul',fmtRate(W.netUp,true));
+  set('disk.r',fmtRate(W.disks.reduce((s,x)=>s+x.read,0),true));
+  set('disk.w',fmtRate(W.disks.reduce((s,x)=>s+x.write,0),true));
+
+  /* ---- CPU detail ---- */
+  set('cpu2.load', fmtPercent(W.cpuUsage,true));
+  set('cpu2.temp', fmtTemp(W.cpuTemp,!W.hidden));
+  setStyle('cpu2.temp','color', (!W.hidden&&isHot(W.cpuTemp,true))?th.hot:th.text);
+  set('cpu2.power', fmtPower(W.cpuPower,!W.hidden));
+  set('cpu2.freq',  fmtClock(W.cpuClock,!W.hidden));
+  set('cpu2.threads', String(W.cores.length));
+  setWidth('cpu2.bar', cpuDisp/100);
+
+  for(let i=0;i<W.cores.length;i++){
+    set('core.'+i+'.val', Math.round(W.cores[i])+'%');
+    setWidth('core.'+i+'.bar', easeTo('core'+i,W.cores[i],0.05,0.25,0.10)/100);
+  }
+
+  /* ---- GPU selector ---- */
+  W.gpus.forEach((g,i)=>{
+    const e=busiestEngine(g);
+    const parts=[fmtPercent(e?e.usage:0,true), fmtTemp(g.temp,true,0), fmtPower(g.power,true)];
+    set('gsel.'+i+'.parts', parts.join('   /   '));
+    set('gsel.'+i+'.peak', e? ('PEAK: '+e.name) : 'NO ENGINE DATA');
+    setWidth('gsel.'+i+'.bar', easeTo('gsel'+i, e?e.usage:0, 0.05,0.25,0.10)/100);
+  });
+
+  /* ---- GPU detail ---- */
+  const od = (S.openGpu==null)?null:W.gpus[S.openGpu];
+  if(od){
+    const e=busiestEngine(od);
+    set('gdet.usage', fmtPercent(e?e.usage:0,true));
+    set('gdet.temp', fmtTemp(od.temp,true));
+    setStyle('gdet.temp','color', isHot(od.temp,true)?th.hot:th.text);
+    set('gdet.power', fmtPower(od.power,true));
+    set('gdet.vrampct', fmtPercent((od.vramUsed/od.vramTotal)*100,true));
+    set('gdet.vram', fmtCapacityPair(od.vramUsed,true,od.vramTotal,true));
+    set('gdet.max', e? ('MAX / '+e.name) : '');
+    setWidth('gdet.bar', easeTo('gdet', e?e.usage:0, 0.05,0.25,0.10)/100);
+    od.engines.forEach((en,i)=>{
+      set('eng.'+i+'.val', en.usage+'%');
+      setWidth('eng.'+i+'.bar', easeTo('eng'+i, en.usage, 0.05,0.25,0.10)/100);
+    });
+  }
+
+  /* ---- Disk detail ---- */
+  set('dtot.r', fmtRate(W.disks.reduce((s,x)=>s+x.read,0),true));
+  set('dtot.w', fmtRate(W.disks.reduce((s,x)=>s+x.write,0),true));
+  W.disks.forEach((dk,i)=>{
+    set('dsk.'+i+'.read', fmtRate(dk.read,true));
+    set('dsk.'+i+'.write', fmtRate(dk.write,true));
+    set('dsk.'+i+'.act', 'Activity  '+dk.activity+'%');
+    set('dsk.'+i+'.temp', dk.temp!=null? ('Temp  '+dk.temp.toFixed(1)+' C') : 'Temp  -- C');
+    setStyle('dsk.'+i+'.temp','color', isHot(dk.temp,true)?th.hot:th.muted);
+    setWidth('dsk.'+i+'.bar', easeTo('dsk'+i, dk.activity, 0.05,0.30,0.10)/100);
+  });
+
+  /* ---- sparklines ---- */
+  dev.querySelectorAll('canvas[data-spark]').forEach(cv=>{
+    const which=cv.getAttribute('data-spark')||'gpuHistory';
+    let pts, color;
+    if(which==='cpuHistory'){ pts=CPU_HISTORY; color=th.cpu; }
+    else if(which.indexOf('gpuHistory:')===0){ pts=GPU_HISTORIES[+which.slice(11)]||[]; color=th.gpu; }
+    else { pts=GPU_HISTORY; color=th.gpu; }
+    sparkCanvas(cv,pts,color,th.hot,85);
+  });
+}
+
+/* =========================================================================
+   11. toolbar + inspector
+   ========================================================================= */
+const VIEW={w:393,h:852};
+function applyViewport(w,h,focusBtn){
+  VIEW.w=clamp(Math.round(w),240,2400);
+  VIEW.h=clamp(Math.round(h),240,2400);
+  document.getElementById('inW').value=VIEW.w;
+  document.getElementById('inH').value=VIEW.h;
+  document.querySelectorAll('[data-vp]').forEach(b=>b.classList.remove('on'));
+  if(focusBtn) focusBtn.classList.add('on');
+  render();
+  fitStage();
+}
+function fitStage(){
+  const wrap=document.getElementById('fitwrap');
+  const stage=document.getElementById('stage');
+  if(!S.fit){ wrap.style.transform='none'; return; }
+  const pad=52;
+  const availW=stage.clientWidth-pad, availH=stage.clientHeight-pad;
+  const bezW=VIEW.w+ (M.short>700?26:18);
+  const bezH=VIEW.h+ (M.short>700?26:18);
+  const k=Math.min(1, availW/bezW, availH/bezH);
+  wrap.style.transform=`scale(${k.toFixed(4)})`;
+}
+function syncToolbar(){
+  document.querySelectorAll('#themeBtns .btn').forEach(b=>{
+    const th=THEMES.find(t=>t.id===b.dataset.th);
+    b.classList.toggle('on', b.dataset.th===S.themeId);
+    if(th) b.style.borderColor = b.dataset.th===S.themeId ? th.cpu : '';
+  });
+}
+function syncHostToolbar(){
+  const sel=document.getElementById('hostSel');
+  if(sel) sel.value = S.hostEmpty ? 'scanning-empty' : S.hostState;
+  document.querySelectorAll('[data-page]').forEach(b=>{
+    b.classList.toggle('on', b.dataset.page===S.page);
+  });
+}
+function buildThemeButtons(){
+  const host=document.getElementById('themeBtns');
+  host.innerHTML=THEMES.map(t=>`<button class="btn tone" data-th="${t.id}" title="${t.name}"
+     style="background:linear-gradient(135deg,${t.cpu} 0 34%,${t.gpu} 34% 67%,${t.bg} 67%)"></button>`).join('');
+  host.querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>{
+    S.themeId=b.dataset.th; syncToolbar(); render();
+  }));
+}
+function updateInspector(){
+  const el=document.getElementById('metrics');
+  const rows=[
+    ['视口', `${VIEW.w} × ${VIEW.h}`],
+    ['方向', M.portrait?'portrait':'landscape'],
+    ['ScreenClass', M.cls],
+    ['LayoutVariant', M.variant],
+    ['短边 / scale', `${M.short} / ${M.scale.toFixed(3)}`],
+    ['gutter / radius', `${M.gutter.toFixed(1)} / ${M.radius.toFixed(1)}`],
+    ['panelPadding', M.padding.toFixed(1)],
+    ['pagePadding', M.pagePadding.toFixed(1)],
+    ['headerHeight', M.headerHeight.toFixed(1)],
+    ['dashboardColumns', M.dashboardColumns],
+    ['侧边导航栏', M.hasSideRail?'显示':'隐藏'],
+    ['当前页面', S.page],
+  ];
+  el.innerHTML=rows.map(([k,v])=>`<div class="kv"><span>${k}</span><span>${esc(v)}</span></div>`).join('');
+
+  const ni=document.getElementById('navinfo');
+  ni.innerHTML=[
+    ['Dashboard', S.page==='dashboard'?'●':''],
+    ['Host Link', S.page==='hosts'?'●':''],
+    ['CPU Detail', S.page==='cpu'?'●':''],
+    ['GPU Selector', S.page==='gpuSelector'?'●':''],
+    ['GPU Detail', S.page==='gpuDetail'?'●':''],
+    ['Disk Detail', S.page==='disks'?'●':''],
+    ['面板适配器', W.gpus[S.gpuIndex]?W.gpus[S.gpuIndex].name.slice(0,20):'—'],
+    ['详情页适配器', S.openGpu==null?'—':(W.gpus[S.openGpu]?W.gpus[S.openGpu].name.slice(0,20):'—')],
+    ['连接状态', hostStateBadge()],
+    ['已发现主机', String(hostList().length)],
+    ['选中主机', S.hostIndex],
+    ['本机名称', S.deviceName.slice(0,22)],
+  ].map(([k,v])=>`<div class="kv"><span>${k}</span><span>${esc(v||'')}</span></div>`).join('');
+}
+
+/* =========================================================================
+   12. boot
+   ========================================================================= */
+seedWorld();
+for(let i=0;i<HIST_POINTS;i++){ CPU_HISTORY.push(null); GPU_HISTORY.push(null); }
+historyGpuId=W.gpus[S.gpuIndex].name;
+
+// Deep link: #p=cpu&vp=800x480&t=neon_pulse&link=STALE&hidden=1
+//            #p=hosts&hs=online&host=1
+(function parseHash(){
+  const h=new URLSearchParams(location.hash.replace(/^#/,''));
+  const vp=h.get('vp');
+  if(vp&&/^\d+x\d+$/.test(vp)){ const [w,hh]=vp.split('x').map(Number); VIEW.w=w; VIEW.h=hh; }
+  const t=h.get('t'); if(t&&THEMES.some(x=>x.id===t)) S.themeId=t;
+  const p=h.get('p');
+  if(['hosts','dashboard','cpu','gpuSelector','gpuDetail','disks'].includes(p)){
+    if(p==='gpuDetail'){ S.openGpu=0; }
+    S.page=p;
+  }
+  const l=h.get('link'); if(['SIM','LIVE','STALE','WAIT'].includes(l)) S.link=l;
+  if(h.get('hidden')==='1') W.hidden=true;
+  if(h.get('sheet')==='1') S.sheet=true;
+  const hs=h.get('hs');
+  if(hs==='scanning-empty'){ S.hostState='scanning'; S.hostEmpty=true; }
+  else if(['idle','scanning','found','requesting','connecting','online','offline','failed'].includes(hs)) S.hostState=hs;
+  const hi=h.get('host'); if(hi!=null && /^\d+$/.test(hi)) S.hostIndex=clamp(parseInt(hi,10),0,HOSTS.length-1);
+  const dn=h.get('dev'); if(dn) S.deviceName=dn;
+  // Keep the status bar in step with the link the deep link asked for, so a
+  // screenshot of the dashboard and one of the connect page agree.
+  if(['online'].includes(S.hostState)) S.link='LIVE';
+  else if(['offline','failed'].includes(S.hostState) && !h.get('link')) S.link='STALE';
+  else if(['idle','scanning','found','requesting','connecting'].includes(S.hostState) && !h.get('link')) S.link='WAIT';
+})();
+
+// Pre-roll 60 samples so the sparklines open on a full, lively window
+// (the real app starts empty and fills over its first minute).
+for(let i=0;i<HIST_POINTS;i++){ stepWorld(); pushHistory(); }
+
+buildThemeButtons();
+syncToolbar();
+
+const sel=document.getElementById('linkSel'); sel.value=S.link;
+document.getElementById('cbHidden').checked=W.hidden;
+
+document.querySelectorAll('[data-vp]').forEach(b=>b.addEventListener('click',()=>{
+  const [w,h]=b.dataset.vp.split('x').map(Number);
+  applyViewport(w,h,b);
+}));
+document.getElementById('applyWH').addEventListener('click',()=>{
+  applyViewport(+document.getElementById('inW').value, +document.getElementById('inH').value, null);
+});
+document.getElementById('swapWH').addEventListener('click',()=>{
+  applyViewport(VIEW.h, VIEW.w, null);
+});
+document.getElementById('linkSel').addEventListener('change',e=>{ S.link=e.target.value; render(); });
+document.getElementById('hostSel').addEventListener('change',e=>{
+  const v=e.target.value;
+  if(v==='scanning-empty'){ S.hostEmpty=true; nav.setHostState('scanning'); }
+  else { S.hostEmpty=false; nav.setHostState(v); }
+});
+document.querySelectorAll('[data-page]').forEach(b=>b.addEventListener('click',()=>{
+  if(b.dataset.page==='hosts') nav.openHosts(); else nav.home();
+  syncHostToolbar();
+}));
+document.getElementById('cbHidden').addEventListener('change',e=>{ W.hidden=e.target.checked; render(); });
+document.getElementById('cbFit').addEventListener('change',e=>{ S.fit=e.target.checked; fitStage(); });
+window.addEventListener('resize',()=>fitStage());
+
+// keyboard: Esc closes sheet, 1-6 pick theme
+window.addEventListener('keydown',e=>{
+  if(e.key==='Escape'&&S.sheet){ S.sheet=false; render(); }
+  const n=parseInt(e.key,10);
+  if(n>=1&&n<=6){ S.themeId=THEMES[n-1].id; syncToolbar(); render(); }
+});
+
+// first paint: default to a real phone (portrait) - the 480x480 square is a
+// firmware reference preset, not a phone shape.
+document.querySelector('[data-vp="393x852"]').classList.add('on');
+render();
+fitStage();
+
+// 50 ms display tick (DISPLAY_SMOOTH_INTERVAL_MS)
+let acc=0;
+setInterval(()=>{
+  acc+=50;
+  if(acc>=1000){ acc=0; stepWorld(); pushHistory(); }
+  paint();
+},50);
+</script>
+</body>
+</html>
