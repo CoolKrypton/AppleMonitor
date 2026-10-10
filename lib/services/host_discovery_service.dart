@@ -186,6 +186,8 @@ class HostDiscoveryService {
   int _refused = 0;
   int _rx = 0;
   int _offersSeen = 0;
+  int _pairSent = 0;
+  int _pairRefused = 0;
 
   /// Hosts heard from, newest datagram wins.
   Stream<DiscoveredHost> get onHost => _hosts.stream;
@@ -499,14 +501,26 @@ class HostDiscoveryService {
 
   /// Asks one host for a credential. The host queues the request for on-screen
   /// confirmation and answers with a `pairing.grant` - possibly minutes later.
-  void requestPairing(
+  ///
+  /// Reports whether the datagram reached the socket, and counts both outcomes.
+  /// That evidence is what tells "the request was never sent" from "it was sent
+  /// and lost" - which is the whole question when the PC shows no dialog and
+  /// the app cannot say why.
+  ///
+  /// The host keys pending requests by device id, so repeating this costs
+  /// nothing on its side; callers are expected to repeat it, because the
+  /// datagram itself has no protection against loss.
+  bool requestPairing(
     HostEndpoint host, {
     required String deviceId,
     required String deviceName,
   }) {
     final RawDatagramSocket? socket = _socket;
     final InternetAddress? address = _parseIp(host.ip);
-    if (socket == null || address == null) return;
+    if (socket == null || address == null) {
+      _pairRefused++;
+      return false;
+    }
     final String json = Envelope.encode(
       type: Proto.pairRequest,
       payload: <String, dynamic>{
@@ -515,12 +529,30 @@ class HostDiscoveryService {
       },
     );
     final Uint8List bytes = Uint8List.fromList(utf8.encode(json));
-    if (bytes.length > Proto.maxDatagramBytes) return;
+    if (bytes.length > Proto.maxDatagramBytes) {
+      _pairRefused++;
+      return false;
+    }
     try {
       socket.send(bytes, address, discoveryPort);
-    } on SocketException {
-      // Surfaced to the user as "no answer"; nothing else to do here.
+      _pairSent++;
+      return true;
+    } catch (_) {
+      // A send can fail for more reasons than SocketException - a socket the
+      // platform has already torn down reports a StateError - and every one of
+      // them used to be swallowed here and surface as "the PC did not answer".
+      _pairRefused++;
+      return false;
     }
+  }
+
+  /// How the pairing sends went, sized for the waiting caption.
+  String get pairDiagnostics => 'pair tx=$_pairSent err=$_pairRefused';
+
+  /// Zeroes the pairing counters, so one pairing attempt reports only its own.
+  void resetPairStats() {
+    _pairSent = 0;
+    _pairRefused = 0;
   }
 
   // -------------------------------------------------------------------------

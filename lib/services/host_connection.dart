@@ -111,6 +111,9 @@ class HostConnectionController extends ChangeNotifier {
   Timer? _scanTimer;
   Timer? _retryTimer;
   Timer? _pairTimeout;
+
+  /// Re-sends `pairing.request` while the PC's user is deciding.
+  Timer? _pairRetry;
   int _scanTicks = 0;
   int _retryAttempt = 0;
   StreamSubscription<DiscoveredHost>? _hostSubscription;
@@ -161,6 +164,7 @@ class HostConnectionController extends ChangeNotifier {
     _scanTimer?.cancel();
     _retryTimer?.cancel();
     _pairTimeout?.cancel();
+    _pairRetry?.cancel();
     _hostSubscription?.cancel();
     _grantSubscription?.cancel();
     _link?.close();
@@ -282,17 +286,41 @@ class HostConnectionController extends ChangeNotifier {
 
   /// Sends a `pairing.request` and waits for the PC's user to approve it.
   Future<void> requestPairing(DiscoveredHost host) async {
+    // Stop the sweep before asking. Discovery has already done its job, and a
+    // /24 unicast burst is precisely what a mobile Wi-Fi stack drops datagrams
+    // from - so leaving it running is how the request gets lost on the way out.
+    _scanTimer?.cancel();
+    _scanTimer = null;
+
     _pending = host.endpoint;
-    _setState(
-      HostConnectionState.requesting,
-      'Waiting for confirmation on ${host.endpoint.hostName}',
-    );
     final Completer<PairGrant> completer = Completer<PairGrant>();
     _pendingGrant = completer;
-    _discovery.requestPairing(
-      host.endpoint,
-      deviceId: _deviceId,
-      deviceName: _deviceName,
+    _discovery.resetPairStats();
+
+    void submit() {
+      _discovery.requestPairing(
+        host.endpoint,
+        deviceId: _deviceId,
+        deviceName: _deviceName,
+      );
+      // The counters go in the caption because on iOS this is the only place
+      // they can be seen: no dialog on the PC plus "tx=0" means the datagram
+      // never left, while a non-zero count means it left and was lost.
+      _setState(
+        HostConnectionState.requesting,
+        'Waiting on ${host.endpoint.hostName} · ${_discovery.pairDiagnostics}',
+      );
+    }
+
+    submit();
+    // One datagram is not a delivery guarantee. The host replaces its pending
+    // entry for the same device id rather than queueing a second one, so
+    // repeating the request is free on the PC side and is what carries it
+    // across a drop.
+    _pairRetry?.cancel();
+    _pairRetry = Timer.periodic(
+      const Duration(milliseconds: 900),
+      (_) => submit(),
     );
 
     // The host keeps the request queued until its user answers, so this waits
@@ -303,7 +331,6 @@ class HostConnectionController extends ChangeNotifier {
         completer.completeError(HostLinkException('timed out'));
       }
     });
-    notifyListeners();
 
     try {
       final PairGrant grant = await completer.future;
@@ -315,8 +342,12 @@ class HostConnectionController extends ChangeNotifier {
             : 'Pairing was not approved.');
       }
     } on HostLinkException {
-      _fail('No confirmation from the PC. Try again.');
+      _fail(
+        'No confirmation from the PC. ${_discovery.pairDiagnostics} - try again.',
+      );
     } finally {
+      _pairRetry?.cancel();
+      _pairRetry = null;
       _pairTimeout?.cancel();
       _pairTimeout = null;
       _pendingGrant = null;
