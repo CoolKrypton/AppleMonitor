@@ -100,6 +100,8 @@ git push -u origin main
 
 推送时弹出的登录窗口，用浏览器授权即可（Git Credential Manager 会接管，不需要手输密码）。
 
+> **推送报 `remote: Repository not found.`？** 别急着怀疑网络或账号权限 —— GitHub 对「仓库不存在」和「你无权访问」返回同一个 404。先按 **7.1 节**三步自查，九成是仓库其实还没建出来。
+
 > **想让 commit 记在你的 GitHub 名下？** 本地 git 身份还是占位的，改一下再提交：
 > ```bash
 > git config user.name  "你的名字"
@@ -205,6 +207,7 @@ Sideloadly 0.60+ 也有自动刷新，但要求每次续签时能通过 USB 或 
 
 | 现象 | 原因 / 处理 |
 | --- | --- |
+| `git push` 报 `remote: Repository not found.` | **先别怀疑网络**。GitHub 对「仓库不存在」和「仓库存在但当前账号无权访问」返回的是**同一个 404**，所以这一句话有两种完全不同的成因： ① 仓库压根没建（最常见）；② 本机缓存的 GitHub 凭据属于**另一个账号**。自查见下方「仓库不存在的排查」。 |
 | Actions 里 `Dart analyze + test` 红叉 | Dart 代码有问题。点进去看日志，本地 `flutter analyze` 也能复现。**这一关不计费**，随便重跑。 |
 | macOS 任务里 `Missing package product 'FlutterGeneratedPluginSwiftPackage'` | Swift Package Manager 没开。workflow 里已有防御步骤，若仍出现就在仓库变量里确认没有干扰配置。 |
 | 签名时报 `A valid provisioning profile ... could not be found` | Bundle ID 被占用了。去仓库 Variables 里把 `BUNDLE_ID` 改成别的（例如加个后缀），重跑流水线。 |
@@ -214,6 +217,52 @@ Sideloadly 0.60+ 也有自动刷新，但要求每次续签时能通过 USB 或 
 | 点开闪退、没有提示 | ① 开发者模式没开；② 签名过期了（第 8 天了）。 |
 | App 里扫描一直 `No PC found` | ① 本地网络权限没给；② PCMonitorHost 没运行，或没开 *Allow LAN pairing*；③ 手机和电脑不在同一网段。 |
 | 第 8 天开始闪退 | 正常的 7 天到期，照第 6 节续签。 |
+
+### 7.1 `Repository not found` 的排查
+
+**第 1 步：确认仓库到底存不存在。**
+
+用浏览器打开（此时你应已登录 GitHub）：
+
+```
+https://github.com/<你的用户名>/AppleMonitor
+```
+
+- 能看到仓库页面 → 仓库存在，跳到第 3 步。
+- 看到 **404** → 仓库没建，去第 2 步。注意：如果这个仓库是 Private，未登录时访问**也会**显示 404，所以务必确认浏览器右上角已经是你自己的账号。
+
+**第 2 步：把仓库建出来。**
+
+打开 <https://github.com/new>，名称填 `AppleMonitor`，选 **Private**，**不要**勾选任何 "Initialize this repository with..." 选项，然后 Create。建完不要再在网页上做任何操作，直接回到第 3 步。
+
+**第 3 步：确认本机 git 用的是哪个账号。**
+
+Windows 上 git 的凭据由 **Git Credential Manager** 托管。如果它记的是另一个 GitHub 账号的凭据，那你往自己的私有仓库推也会得到一模一样的 `Repository not found`。查一下：
+
+```powershell
+cmdkey /list | Select-String github
+git credential-manager github list
+```
+
+- 两条都**没有输出** → 本机没有缓存凭据（干净状态）。直接推送，会弹出浏览器授权窗口，用你的账号登录即可。
+- 列出了**别的账号** → 先清掉它，再推：
+
+  ```powershell
+  # 把列出来的账号逐个登出
+  git credential-manager github logout <那个账号名>
+  ```
+
+  清干净后重新 `git push -u origin main`，浏览器窗口里登录你**自己**的账号。
+
+**第 4 步：验证。**
+
+```powershell
+git ls-remote origin
+```
+
+能列出 `refs/heads/main` 就通了。
+
+> **为什么会踩这个坑**：Windows 上的 git 凭据是**全局共享**的，跟当前目录无关。这台机器上如果曾经为别的项目登录过 GitHub，那个账号就会被静默复用 —— 你甚至不会看到登录窗口，只会看到一句语焉不详的 `Repository not found`。
 
 ---
 
