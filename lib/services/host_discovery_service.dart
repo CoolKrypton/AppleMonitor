@@ -232,6 +232,7 @@ class HostDiscoveryService {
   int _sendWouldBlock = 0;
   int _sendExceptions = 0;
   String? _firstSendException;
+  Future<void>? _probeTask;
   int _rx = 0;
   int _offersSeen = 0;
   int _pairSent = 0;
@@ -381,6 +382,33 @@ class HostDiscoveryService {
     required String deviceName,
     String? pairedHostId,
     String? lastKnownHostIp,
+  }) {
+    final Future<void>? active = _probeTask;
+    if (active != null) return active;
+
+    // The connect controller schedules probes every 800 ms, but an iOS /24
+    // sweep can take longer while the UDP socket is back-pressured. Do not let
+    // Timer.periodic start overlapping sweeps on the same raw socket: they
+    // compete for its send queue and can turn later sends into EWOULDBLOCK.
+    // Callers share the in-flight round and still await its completion.
+    late final Future<void> task;
+    task = _probeOnce(
+      deviceId: deviceId,
+      deviceName: deviceName,
+      pairedHostId: pairedHostId,
+      lastKnownHostIp: lastKnownHostIp,
+    ).whenComplete(() {
+      if (identical(_probeTask, task)) _probeTask = null;
+    });
+    _probeTask = task;
+    return task;
+  }
+
+  Future<void> _probeOnce({
+    required String deviceId,
+    required String deviceName,
+    String? pairedHostId,
+    String? lastKnownHostIp,
   }) async {
     final RawDatagramSocket? socket = _socket;
     if (socket == null) return;
@@ -422,9 +450,8 @@ class HostDiscoveryService {
     _sweepTargets = _sweepFrom(reachable);
     // See the iOS-only guard below: keeping this list empty makes the report
     // accurately show that no prohibited broadcast targets were attempted.
-    _broadcastTargets = Platform.isIOS
-        ? const <InternetAddress>[]
-        : _broadcastFrom(reachable);
+    _broadcastTargets =
+        Platform.isIOS ? const <InternetAddress>[] : _broadcastFrom(reachable);
 
     // The remembered host goes out early: on a reconnect that direct unicast is
     // both the likeliest to be delivered and the fastest.
@@ -545,21 +572,23 @@ class HostDiscoveryService {
 
   /// What the last round actually managed, for the connect screen.
   DiscoveryReport get lastReport => DiscoveryReport(
-    socketError: _socketError,
-    interfaces: _interfaces,
-    locals: _locals.map((InternetAddress a) => a.address).toList(growable: false),
-    bound: _boundTo?.address ?? InternetAddress.anyIPv4.address,
-    usedFallback: _usedProbeFallback,
-    sweepTargets: _sweepTargets.length,
-    broadcastTargets: _broadcastTargets.length,
-    sent: _sent,
-    refused: _refused,
-    sendWouldBlock: _sendWouldBlock,
-    sendExceptions: _sendExceptions,
-    firstSendException: _firstSendException,
-    received: _rx,
-    offers: _offersSeen,
-  );
+        socketError: _socketError,
+        interfaces: _interfaces,
+        locals: _locals
+            .map((InternetAddress a) => a.address)
+            .toList(growable: false),
+        bound: _boundTo?.address ?? InternetAddress.anyIPv4.address,
+        usedFallback: _usedProbeFallback,
+        sweepTargets: _sweepTargets.length,
+        broadcastTargets: _broadcastTargets.length,
+        sent: _sent,
+        refused: _refused,
+        sendWouldBlock: _sendWouldBlock,
+        sendExceptions: _sendExceptions,
+        firstSendException: _firstSendException,
+        received: _rx,
+        offers: _offersSeen,
+      );
 
   /// Zeroes the counters so one scan reports only what it did.
   void resetStats() {
@@ -638,7 +667,11 @@ class HostDiscoveryService {
     }
 
     if (found.isEmpty) {
-      for (final String host in const <String>['223.5.5.5', '1.1.1.1', '8.8.8.8']) {
+      for (final String host in const <String>[
+        '223.5.5.5',
+        '1.1.1.1',
+        '8.8.8.8'
+      ]) {
         try {
           final Socket socket = await Socket.connect(
             host,
@@ -841,7 +874,9 @@ class HostDiscoveryService {
 
     // Same rule the host applies to itself: a refusal never carries a secret,
     // and an approval must carry exactly 32 bytes of it.
-    if (approved ? !is32Bytes(secret) : (envelope.string('error') ?? '').isEmpty) {
+    if (approved
+        ? !is32Bytes(secret)
+        : (envelope.string('error') ?? '').isEmpty) {
       return;
     }
     if (!approved) {
