@@ -212,6 +212,7 @@ class HostDiscoveryService {
   InternetAddress? _boundTo;
 
   StreamSubscription<RawSocketEvent>? _subscription;
+  Completer<void>? _writeReady;
   final StreamController<DiscoveredHost> _hosts =
       StreamController<DiscoveredHost>.broadcast();
   final StreamController<PairGrant> _grants =
@@ -287,6 +288,10 @@ class HostDiscoveryService {
       onError: (Object error) {},
       cancelOnError: false,
     );
+    // We only subscribe for writability after send() says the socket would
+    // block. A permanently enabled write subscription is one-shot and can
+    // otherwise fire before the discovery sweep needs it.
+    socket.writeEventsEnabled = false;
   }
 
   /// Binds the socket. Only non-iOS builds enable broadcast: iOS requires an
@@ -465,7 +470,7 @@ class HostDiscoveryService {
         bool wouldBlock = false;
         Object? sendException;
         bool shortWrite = false;
-        for (int attempt = 0; attempt < _sendAttempts; attempt++) {
+        for (int attempt = 0; attempt < 2; attempt++) {
           try {
             final int written = socket.send(bytes, target, discoveryPort);
             if (written == bytes.length) {
@@ -477,14 +482,10 @@ class HostDiscoveryService {
               break;
             }
             wouldBlock = true;
-            // RawDatagramSocket.send is non-blocking: zero means the packet
-            // was not queued, but the same datagram may be retried later.
+            if (attempt == 0) await _waitUntilWritable(socket);
           } catch (error) {
             sendException = error;
             break;
-          }
-          if (attempt + 1 < _sendAttempts) {
-            await Future<void>.delayed(_sendRetryPause);
           }
         }
         if (queued) {
@@ -518,8 +519,21 @@ class HostDiscoveryService {
   /// costs tens of milliseconds rather than anything the user could notice.
   static const int _batchSize = 12;
   static const Duration _batchPause = Duration(milliseconds: 4);
-  static const int _sendAttempts = 3;
-  static const Duration _sendRetryPause = Duration(milliseconds: 2);
+  static const Duration _writeWaitTimeout = Duration(milliseconds: 12);
+
+  Future<void> _waitUntilWritable(RawDatagramSocket socket) async {
+    final Completer<void> ready = Completer<void>();
+    _writeReady = ready;
+    socket.writeEventsEnabled = true;
+    try {
+      await ready.future.timeout(_writeWaitTimeout);
+    } on TimeoutException {
+      // Record the subsequent send result as the definitive outcome.
+    } finally {
+      if (identical(_writeReady, ready)) _writeReady = null;
+      socket.writeEventsEnabled = false;
+    }
+  }
 
   static String _shortError(Object error) {
     final String value = error is SocketException
@@ -758,7 +772,15 @@ class HostDiscoveryService {
 
   void _onEvent(RawSocketEvent event) {
     final RawDatagramSocket? socket = _socket;
-    if (socket == null || event != RawSocketEvent.read) return;
+    if (socket == null) return;
+    if (event == RawSocketEvent.write) {
+      socket.writeEventsEnabled = false;
+      final Completer<void>? ready = _writeReady;
+      _writeReady = null;
+      if (ready != null && !ready.isCompleted) ready.complete();
+      return;
+    }
+    if (event != RawSocketEvent.read) return;
     Datagram? datagram = socket.receive();
     while (datagram != null) {
       _handle(datagram);
