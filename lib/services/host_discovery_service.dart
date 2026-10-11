@@ -109,6 +109,9 @@ class DiscoveryReport {
     required this.broadcastTargets,
     required this.sent,
     required this.refused,
+    required this.sendWouldBlock,
+    required this.sendExceptions,
+    required this.firstSendException,
     required this.received,
     required this.offers,
   });
@@ -137,6 +140,11 @@ class DiscoveryReport {
   final int sent;
   final int refused;
 
+  /// Failed destinations split by `send()` returning zero versus throwing.
+  final int sendWouldBlock;
+  final int sendExceptions;
+  final String? firstSendException;
+
   /// Datagrams read back off the socket, and how many were LAN offers.
   final int received;
   final int offers;
@@ -154,7 +162,11 @@ class DiscoveryReport {
         '${usedFallback ? ' (via TCP probe)' : ''}',
       )
       ..writeln('targets: sweep=$sweepTargets broadcast=$broadcastTargets')
-      ..writeln('sent: $sent   refused: $refused')
+      ..writeln(
+        'sent: $sent   refused: $refused '
+        '(zero=$sendWouldBlock exceptions=$sendExceptions'
+        '${firstSendException == null ? '' : ' first=$firstSendException'})',
+      )
       ..write('received: $received   offers: $offers');
     return buffer.toString();
   }
@@ -166,7 +178,9 @@ class DiscoveryReport {
   /// counts. A caption that gets clipped still keeps the part that tells a
   /// refused send from a swallowed one.
   String get compact =>
-      'tx=$sent err=$refused rx=$received offer=$offers '
+      'tx=$sent err=$refused z0=$sendWouldBlock ex=$sendExceptions '
+      '${firstSendException == null ? '' : 'why=$firstSendException '}'
+      'rx=$received offer=$offers '
       '| bind=$bound if=$interfaceNames '
       '| swp=$sweepTargets bc=$broadcastTargets '
       '| loc=${locals.isEmpty ? 'none' : locals.join(',')}';
@@ -214,6 +228,9 @@ class HostDiscoveryService {
   bool _usedProbeFallback = false;
   int _sent = 0;
   int _refused = 0;
+  int _sendWouldBlock = 0;
+  int _sendExceptions = 0;
+  String? _firstSendException;
   int _rx = 0;
   int _offersSeen = 0;
   int _pairSent = 0;
@@ -445,6 +462,9 @@ class HostDiscoveryService {
         final Uint8List bytes = Uint8List.fromList(utf8.encode(datagram));
         if (bytes.length > Proto.maxDatagramBytes) continue;
         bool queued = false;
+        bool wouldBlock = false;
+        Object? sendException;
+        bool shortWrite = false;
         for (int attempt = 0; attempt < _sendAttempts; attempt++) {
           try {
             final int written = socket.send(bytes, target, discoveryPort);
@@ -452,10 +472,15 @@ class HostDiscoveryService {
               queued = true;
               break;
             }
-            if (written != 0) break;
+            if (written != 0) {
+              shortWrite = true;
+              break;
+            }
+            wouldBlock = true;
             // RawDatagramSocket.send is non-blocking: zero means the packet
             // was not queued, but the same datagram may be retried later.
-          } catch (_) {
+          } catch (error) {
+            sendException = error;
             break;
           }
           if (attempt + 1 < _sendAttempts) {
@@ -468,6 +493,15 @@ class HostDiscoveryService {
           // Count zero-return sends as refused too; incrementing tx before
           // checking the return value made a full failed sweep look successful.
           _refused++;
+          if (sendException != null) {
+            _sendExceptions++;
+            _firstSendException ??= _shortError(sendException);
+          } else if (shortWrite) {
+            _sendExceptions++;
+            _firstSendException ??= 'short-send';
+          } else if (wouldBlock) {
+            _sendWouldBlock++;
+          }
         }
       }
       if (++inBatch >= _batchSize) {
@@ -487,6 +521,14 @@ class HostDiscoveryService {
   static const int _sendAttempts = 3;
   static const Duration _sendRetryPause = Duration(milliseconds: 2);
 
+  static String _shortError(Object error) {
+    final String value = error is SocketException
+        ? '${error.osError?.errorCode ?? ''}:${error.osError?.message ?? error.message}'
+        : error.toString();
+    final String normalized = value.replaceAll(RegExp(r'\s+'), ' ');
+    return normalized.length <= 48 ? normalized : normalized.substring(0, 48);
+  }
+
   /// What the last round actually managed, for the connect screen.
   DiscoveryReport get lastReport => DiscoveryReport(
     socketError: _socketError,
@@ -498,6 +540,9 @@ class HostDiscoveryService {
     broadcastTargets: _broadcastTargets.length,
     sent: _sent,
     refused: _refused,
+    sendWouldBlock: _sendWouldBlock,
+    sendExceptions: _sendExceptions,
+    firstSendException: _firstSendException,
     received: _rx,
     offers: _offersSeen,
   );
@@ -506,6 +551,9 @@ class HostDiscoveryService {
   void resetStats() {
     _sent = 0;
     _refused = 0;
+    _sendWouldBlock = 0;
+    _sendExceptions = 0;
+    _firstSendException = null;
     _rx = 0;
     _offersSeen = 0;
   }
