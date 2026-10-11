@@ -132,7 +132,8 @@ class DiscoveryReport {
   final int sweepTargets;
   final int broadcastTargets;
 
-  /// Datagrams handed to the socket, and how many it refused.
+  /// Datagrams accepted by the OS send queue, and how many could not be queued.
+  /// An accepted datagram is not proof that it reached the remote host.
   final int sent;
   final int refused;
 
@@ -443,14 +444,29 @@ class HostDiscoveryService {
       for (final String datagram in datagrams) {
         final Uint8List bytes = Uint8List.fromList(utf8.encode(datagram));
         if (bytes.length > Proto.maxDatagramBytes) continue;
-        _sent++;
-        try {
-          socket.send(bytes, target, discoveryPort);
-        } catch (_) {
-          // A target that cannot be reached (VPN, cellular, or a broadcast the
-          // OS refused) is not worth surfacing: the other phases and the next
-          // round cover it. The round must continue regardless, which is the
-          // whole point of counting instead of rethrowing.
+        bool queued = false;
+        for (int attempt = 0; attempt < _sendAttempts; attempt++) {
+          try {
+            final int written = socket.send(bytes, target, discoveryPort);
+            if (written == bytes.length) {
+              queued = true;
+              break;
+            }
+            if (written != 0) break;
+            // RawDatagramSocket.send is non-blocking: zero means the packet
+            // was not queued, but the same datagram may be retried later.
+          } catch (_) {
+            break;
+          }
+          if (attempt + 1 < _sendAttempts) {
+            await Future<void>.delayed(_sendRetryPause);
+          }
+        }
+        if (queued) {
+          _sent++;
+        } else {
+          // Count zero-return sends as refused too; incrementing tx before
+          // checking the return value made a full failed sweep look successful.
           _refused++;
         }
       }
@@ -468,6 +484,8 @@ class HostDiscoveryService {
   /// costs tens of milliseconds rather than anything the user could notice.
   static const int _batchSize = 12;
   static const Duration _batchPause = Duration(milliseconds: 4);
+  static const int _sendAttempts = 3;
+  static const Duration _sendRetryPause = Duration(milliseconds: 2);
 
   /// What the last round actually managed, for the connect screen.
   DiscoveryReport get lastReport => DiscoveryReport(
@@ -662,7 +680,10 @@ class HostDiscoveryService {
       return false;
     }
     try {
-      socket.send(bytes, address, discoveryPort);
+      if (socket.send(bytes, address, discoveryPort) != bytes.length) {
+        _pairRefused++;
+        return false;
+      }
       _pairSent++;
       return true;
     } catch (_) {
