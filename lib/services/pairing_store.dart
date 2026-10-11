@@ -133,13 +133,13 @@ class PairingStore {
   Future<String?> loadDeviceName() async {
     final String? name = await _store.read(_kDeviceName);
     if (name == null || name.trim().isEmpty) return null;
-    return _clampName(name.trim());
+    return clampDeviceName(name.trim());
   }
 
   Future<void> saveDeviceName(String name) async {
     final String trimmed = name.trim();
     if (trimmed.isEmpty) return;
-    await _store.write(_kDeviceName, _clampName(trimmed));
+    await _store.write(_kDeviceName, clampDeviceName(trimmed));
   }
 
   Future<PairedHost?> loadPairedHost() async {
@@ -163,7 +163,7 @@ class PairingStore {
   /// The host caps a device friendly name at 64 UTF-8 bytes, and a cut through
   /// the middle of a multi-byte character would be rejected outright, so the
   /// trim happens on rune boundaries.
-  static String _clampName(String value) {
+  static String clampDeviceName(String value) {
     const int limit = 64;
     if (utf8.encode(value).length <= limit) return value;
     final StringBuffer out = StringBuffer();

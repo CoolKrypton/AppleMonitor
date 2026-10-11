@@ -555,7 +555,7 @@ class HostConnectionController extends ChangeNotifier {
   Future<void> setDeviceName(String name) async {
     final String trimmed = name.trim();
     if (trimmed.isEmpty || trimmed == _deviceName) return;
-    _deviceName = trimmed;
+    _deviceName = PairingStore.clampDeviceName(trimmed);
     await _store.saveDeviceName(trimmed);
     // Re-announce so the PC's pending dialog shows the new name.
     if (_pending != null) {
@@ -621,7 +621,11 @@ class HostConnectionController extends ChangeNotifier {
       final String? name =
           await _deviceChannel.invokeMethod<String>('deviceName');
       final String trimmed = name?.trim() ?? '';
-      return trimmed.isEmpty ? null : trimmed;
+      // iOS can return the user's full device name, which may exceed the
+      // Host protocol's 64-byte UTF-8 limit. Android's platform name is already
+      // short, but applying the same protocol bound here keeps every probe and
+      // pairing request valid regardless of the source of the name.
+      return trimmed.isEmpty ? null : PairingStore.clampDeviceName(trimmed);
     } on PlatformException {
       return null;
     } on MissingPluginException {
