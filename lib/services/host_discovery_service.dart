@@ -719,11 +719,49 @@ class HostDiscoveryService {
       }
     }
 
-    // The answering side caps how many probes it will reply to per second, and
-    // a burst walks this list in order - so a fixed order would keep testing
-    // the same handful of addresses on every round while the rest of the /24
-    // went unanswered. Shuffling makes each round cover a different slice.
-    targets.shuffle();
+    // iOS may back-pressure the UDP socket before a whole /24 has been queued.
+    // Try addresses closest to this device first; on DHCP home networks the PC
+    // is often nearby in the lease range, and this avoids spending the limited
+    // send capacity on distant guesses before trying the adjacent host.
+    int nearestDistance(InternetAddress target) {
+      final List<String> targetOctets = target.address.split('.');
+      if (targetOctets.length != 4) return 255;
+      final int? host = int.tryParse(targetOctets.last);
+      if (host == null) return 255;
+      int nearest = 255;
+      for (final InternetAddress local in locals) {
+        final List<String> localOctets = local.address.split('.');
+        if (localOctets.length != 4 ||
+            localOctets[0] != targetOctets[0] ||
+            localOctets[1] != targetOctets[1] ||
+            localOctets[2] != targetOctets[2]) {
+          continue;
+        }
+        final int? localHost = int.tryParse(localOctets.last);
+        if (localHost == null) continue;
+        final int distance = (host - localHost).abs();
+        if (distance < nearest) nearest = distance;
+      }
+      return nearest;
+    }
+
+    targets.sort((InternetAddress a, InternetAddress b) {
+      final List<String> aOctets = a.address.split('.');
+      final List<String> bOctets = b.address.split('.');
+      final int aHost = int.parse(aOctets.last);
+      final int bHost = int.parse(bOctets.last);
+      final int distanceOrder =
+          nearestDistance(a).compareTo(nearestDistance(b));
+      if (distanceOrder != 0) return distanceOrder;
+      if (aOctets[0] != bOctets[0] ||
+          aOctets[1] != bOctets[1] ||
+          aOctets[2] != bOctets[2]) {
+        return a.address.compareTo(b.address);
+      }
+      // For equally close addresses, try the higher lease first. This puts
+      // 192.168.1.10 immediately before .8 when this device is at .9.
+      return bHost.compareTo(aHost);
+    });
     return targets;
   }
 
