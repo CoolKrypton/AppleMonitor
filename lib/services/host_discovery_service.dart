@@ -621,13 +621,16 @@ class HostDiscoveryService {
     final InternetAddress? remembered = _parseIp(lastKnownHostIp ?? '');
 
     // It goes out *first*, before anything else has had a chance to fill the
-    // send queue. That ordering is the whole reason a hotspot can find a host
-    // at all: the sweep below is 253 datagrams on a link whose clients live in
-    // thirteen addresses, so most of it is answered with a refusal, and a
-    // datagram queued after those is refused along with them. Measured on the
-    // hotspot this came from, the remembered probe was the last send of a round
-    // and made it out only on the rounds where its ARP entry happened to be
-    // fresh - which is what "it finds the PC now and then" actually was.
+    // send queue. On the hotspot this came from, that ordering was the whole
+    // reason discovery failed: the sweep was 253 datagrams on a link whose
+    // clients live in thirteen addresses, most of it was answered with a
+    // refusal, and the remembered probe - the last send of the round - was
+    // refused along with them. It made it out only on the rounds where its ARP
+    // entry happened to be fresh, which is what "it finds the PC now and then"
+    // actually was. [_sweepLimit] now shrinks that sweep to the size of the
+    // link, but the order still has to hold: a round the platform decides to
+    // back-pressure must not be able to spend the queue before the one datagram
+    // a reconnect depends on.
     // Discovery without a remembered host is unaffected: the sweep and the
     // broadcast still run, just after this one datagram instead of before it.
     if (remembered != null) {
