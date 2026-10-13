@@ -104,6 +104,7 @@ class DiscoveryReport {
     required this.interfaces,
     required this.locals,
     required this.bound,
+    required this.lanCandidates,
     required this.usedFallback,
     required this.sweepTargets,
     required this.broadcastTargets,
@@ -128,6 +129,15 @@ class DiscoveryReport {
   /// The address the socket was bound to. `0.0.0.0` means the system chose the
   /// source address, which is the state this whole report exists to catch.
   final String bound;
+
+  /// The interfaces the bind was allowed to choose from, best first, as
+  /// `name:address`.
+  ///
+  /// This is the field that answers "why that bind". A scan that was pinned to
+  /// a Wi-Fi address while the phone was serving a hotspot, or that fell back
+  /// to `0.0.0.0` because no LAN interface was recognised at all, looks
+  /// identical from the counters alone.
+  final List<String> lanCandidates;
 
   /// True when those addresses had to come from the TCP-connect fallback.
   final bool usedFallback;
@@ -155,6 +165,9 @@ class DiscoveryReport {
       ..writeln(socketError == null ? 'socket: bound' : 'socket: $socketError')
       ..writeln('bound: $bound')
       ..writeln(
+        'lan: ${lanCandidates.isEmpty ? 'none usable' : lanCandidates.join(' ')}',
+      )
+      ..writeln(
         'interfaces: ${interfaces.isEmpty ? 'none' : interfaces.join(' ')}',
       )
       ..writeln(
@@ -181,7 +194,9 @@ class DiscoveryReport {
       'tx=$sent err=$refused z0=$sendWouldBlock ex=$sendExceptions '
       '${firstSendException == null ? '' : 'why=$firstSendException '}'
       'rx=$received offer=$offers '
-      '| bind=$bound if=$interfaceNames '
+      '| bind=$bound '
+      'lan=${lanCandidates.isEmpty ? 'none' : lanCandidates.join(',')} '
+      '| if=$interfaceNames '
       '| swp=$sweepTargets bc=$broadcastTargets '
       '| loc=${locals.isEmpty ? 'none' : locals.join(',')}';
 
@@ -195,6 +210,35 @@ class DiscoveryReport {
     }
     return names.isEmpty ? 'none' : names.join(' ');
   }
+}
+
+/// Every IPv4 address one survey saw, split by whether its interface can carry
+/// the LAN.
+class _InterfaceSurvey {
+  /// All of them, as `name:address`, for the report's interface line.
+  final List<String> seen = <String>[];
+
+  /// Private addresses on interfaces that can carry the LAN, best first.
+  final List<_LanCandidate> lan = <_LanCandidate>[];
+
+  /// Addresses rejected because their interface is a tunnel, a cellular slot or
+  /// a peer-to-peer link. Kept so the outbound-probe fallback cannot hand back
+  /// an address already known not to be the LAN.
+  final Set<String> nonLan = <String>{};
+
+  void note(String label) {
+    if (!seen.contains(label)) seen.add(label);
+  }
+}
+
+/// A bind candidate: the interface it came from and the address on it.
+class _LanCandidate {
+  const _LanCandidate(this.interfaceName, this.address);
+
+  final String interfaceName;
+  final InternetAddress address;
+
+  String get label => '$interfaceName:${address.address}';
 }
 
 class HostDiscoveryService {
@@ -224,6 +268,11 @@ class HostDiscoveryService {
   String? _socketError;
   List<String> _interfaces = const <String>[];
   List<InternetAddress> _locals = const <InternetAddress>[];
+
+  /// The LAN candidates the last survey found, best first. Reported, because a
+  /// bind that picked the wrong interface and a bind that had nothing to pick
+  /// from are otherwise the same silence.
+  List<_LanCandidate> _lanSeen = const <_LanCandidate>[];
   List<InternetAddress> _sweepTargets = const <InternetAddress>[];
   List<InternetAddress> _broadcastTargets = const <InternetAddress>[];
   bool _usedProbeFallback = false;
@@ -310,6 +359,73 @@ class HostDiscoveryService {
     return socket;
   }
 
+  /// Interface names that can never carry the LAN this app talks to.
+  ///
+  /// This is a **deny**-list on purpose. The bind used to accept `en*` and
+  /// nothing else, which quietly excluded the interface a phone uses when it
+  /// *serves* the network: an iPhone offering a personal hotspot reaches its
+  /// clients over `bridge100` (or `ap1` on newer releases), never over `en0`.
+  /// Measured on exactly that hotspot, at `bind=0.0.0.0 if=pdp_ip0 bridge100
+  /// swp=506`: the bind had failed, the sweep walked the hotspot's `/24` plus
+  /// the carrier's `10.x` `/24`, and 971 of 1012 sends were refused with the
+  /// destination queue full. Not one probe reached the PC.
+  ///
+  /// An allow-list cannot be repaired by adding one name without excluding the
+  /// next platform, so the filter now rejects only what is provably not the
+  /// LAN:
+  ///
+  /// * `lo*` - loopback;
+  /// * `utun*`, `ipsec*`, `tun*`, `ppp*` - VPN, relay and tethered tunnels;
+  /// * `pdp*`, `rmnet*`, `ccmni*`, `clat*` - the cellular slots on iOS, Android
+  ///   and Android's 464xlat, whose `10.x` addresses are carrier space that
+  ///   [_isPrivateIpv4] cannot tell apart from a home LAN;
+  /// * `awdl*`, `llw*`, `anpi*` - Apple's peer-to-peer and accessory links;
+  /// * `p2p*` - Wi-Fi Direct;
+  /// * `gif*`, `stf*`, `sit*`, `dummy*` - software placeholders.
+  ///
+  /// Everything else - `en*`, `ap*`, `bridge*`, Android's `wlan*` / `ap*` /
+  /// `swlan*` / `rndis*` / `bt-pan` - is a candidate.
+  static const List<String> _nonLanInterfacePrefixes = <String>[
+    'lo',
+    'utun',
+    'ipsec',
+    'tun',
+    'ppp',
+    'pdp',
+    'rmnet',
+    'ccmni',
+    'clat',
+    'awdl',
+    'llw',
+    'anpi',
+    'p2p',
+    'gif',
+    'stf',
+    'sit',
+    'dummy',
+  ];
+
+  /// Whether [name] is an interface that can carry the LAN.
+  static bool _isLanInterface(String name) {
+    for (final String prefix in _nonLanInterfacePrefixes) {
+      if (name.startsWith(prefix)) return false;
+    }
+    return true;
+  }
+
+  /// Orders two usable interfaces: Wi-Fi first, then the slot a personal
+  /// hotspot is served from, then whatever else survived the filter.
+  ///
+  /// Wi-Fi keeps rank 0 because it is the interface every build so far was
+  /// tested against, and a hotspot must not be allowed to change that. The
+  /// hotspot ranks next because an iPhone serving one has no `en*` address at
+  /// all - which is the entire case this ordering exists for.
+  static int _lanRank(String name) {
+    if (name.startsWith('en')) return 0;
+    if (name.startsWith('bridge') || name.startsWith('ap')) return 1;
+    return 2;
+  }
+
   /// The address the discovery socket should send *from*, or `null` to let the
   /// system choose.
   ///
@@ -320,13 +436,31 @@ class HostDiscoveryService {
   /// on an interface that cannot reach the LAN the datagrams are accepted by
   /// `send()` and then dropped without a trace - the counters show a clean
   /// send, the PC sees nothing, and there is no evidence anywhere to say why.
-  /// The interface whose name starts with `en` is the Wi-Fi one; binding to it
-  /// takes the decision away from the system.
+  /// Binding to a real LAN interface takes that decision away from the system.
+  ///
+  /// Which interface that is depends on how the phone is networked: `en0` while
+  /// it is a Wi-Fi *client*, `bridge100` / `ap1` while it *serves* a personal
+  /// hotspot. Both are accepted; see [_nonLanInterfacePrefixes] for why the
+  /// filter rejects by name instead of accepting by name.
   ///
   /// Android reports a single `wlan0` and has no equivalent ambiguity, so it
   /// keeps the unbound socket and its traffic profile is untouched.
   Future<InternetAddress?> _preferredBindAddress() async {
     if (!Platform.isIOS) return null;
+    final _InterfaceSurvey survey = await _surveyInterfaces();
+    _lanSeen = survey.lan;
+    return survey.lan.isEmpty ? null : survey.lan.first.address;
+  }
+
+  /// One pass over the platform's IPv4 interfaces, classified.
+  ///
+  /// Shared by the bind choice and the sweep so the two agree on what "the LAN"
+  /// is. They disagreed once already: the socket was not pinned, so the sweep
+  /// was built from every private address on the device while only one of them
+  /// could carry a packet - and the subnet it could not reach is what filled
+  /// the send queue.
+  Future<_InterfaceSurvey> _surveyInterfaces() async {
+    final _InterfaceSurvey survey = _InterfaceSurvey();
     try {
       final List<NetworkInterface> list = await NetworkInterface.list(
         type: InternetAddressType.IPv4,
@@ -334,15 +468,27 @@ class HostDiscoveryService {
         includeLinkLocal: false,
       );
       for (final NetworkInterface interface in list) {
-        if (!interface.name.startsWith('en')) continue;
+        final bool lan = _isLanInterface(interface.name);
         for (final InternetAddress address in interface.addresses) {
-          if (_isPrivateIpv4(address.address)) return address;
+          survey.note('${interface.name}:${address.address}');
+          if (!_isPrivateIpv4(address.address)) continue;
+          if (lan) {
+            survey.lan.add(_LanCandidate(interface.name, address));
+          } else {
+            survey.nonLan.add(address.address);
+          }
         }
       }
     } catch (_) {
-      // No interface list: `anyIPv4` is the answer, and the report shows it.
+      // No interface list at all; the outbound probe is the whole plan.
     }
-    return null;
+    survey.lan.sort((_LanCandidate a, _LanCandidate b) {
+      final int rank =
+          _lanRank(a.interfaceName).compareTo(_lanRank(b.interfaceName));
+      if (rank != 0) return rank;
+      return a.interfaceName.compareTo(b.interfaceName);
+    });
+    return survey;
   }
 
   static String _describe(Object error) => error is SocketException
@@ -578,6 +724,9 @@ class HostDiscoveryService {
             .map((InternetAddress a) => a.address)
             .toList(growable: false),
         bound: _boundTo?.address ?? InternetAddress.anyIPv4.address,
+        lanCandidates: _lanSeen
+            .map((_LanCandidate candidate) => candidate.label)
+            .toList(growable: false),
         usedFallback: _usedProbeFallback,
         sweepTargets: _sweepTargets.length,
         broadcastTargets: _broadcastTargets.length,
@@ -617,53 +766,41 @@ class HostDiscoveryService {
   /// skipped there and their traffic profile is untouched.
   bool get _sweepLocalSubnet => Platform.isIOS;
 
-  /// The private IPv4 addresses of this device, one per usable interface.
+  /// The private IPv4 addresses of the LAN interfaces this device has.
   ///
-  /// iOS hands out several - Wi-Fi, a cellular slot and one `utun` per VPN - and
-  /// the sweep is built per subnet, so every private address is kept and
-  /// everything else dropped. Which of them the sweep actually walks is decided
-  /// in [probeOnce]: only the interface the socket is bound to, because no
-  /// other subnet is reachable from that source address anyway.
+  /// Only interfaces that can carry the LAN count, and that is decided by name
+  /// in [_nonLanInterfacePrefixes], not by the address. iOS hands out several
+  /// private addresses at once - Wi-Fi *or* the hotspot's bridge, a cellular
+  /// slot, one `utun` per VPN - and the sweep is built per subnet, so every
+  /// address kept here becomes 253 datagrams. The cellular slot was the one
+  /// that hurt: `10.x` is carrier space, [_isPrivateIpv4] cannot tell it from a
+  /// home LAN, and on the hotspot this was measured on it doubled the sweep
+  /// (506 targets) and starved the queue until 971 of 1012 sends were refused.
+  ///
+  /// Which of the kept addresses the sweep actually walks is decided in
+  /// [probeOnce]: only the interface the socket is bound to, because no other
+  /// subnet is reachable from that source address anyway.
   ///
   /// The address is read from its dotted string rather than from `rawAddress`:
   /// a platform that reports a widened or mapped representation would make
   /// every `rawAddress.length != 4` check fail, and an empty sweep is
   /// indistinguishable from "no host answered".
   ///
-  /// If the interface list yields nothing usable - nothing guarantees it
-  /// reports the Wi-Fi interface - the outbound address is learned instead from
-  /// a throwaway TCP connect, which the OS resolves through the normal routing
-  /// table.
+  /// If the survey yields nothing - nothing guarantees the interface list
+  /// reports the LAN at all - the outbound address is learned instead from a
+  /// throwaway TCP connect, which the OS resolves through the normal routing
+  /// table. An answer that the survey already rejected by interface name is
+  /// discarded: on a phone whose default route is cellular, that probe replies
+  /// with the carrier's `10.x`, and sweeping the carrier is worse than
+  /// sweeping nothing.
   Future<List<InternetAddress>> _localAddresses() async {
+    final _InterfaceSurvey survey = await _surveyInterfaces();
+    _lanSeen = survey.lan;
+
     final List<InternetAddress> found = <InternetAddress>[];
     final Set<String> seen = <String>{};
-    final List<String> interfaces = <String>[];
-
-    void record(String label) {
-      if (!interfaces.contains(label)) interfaces.add(label);
-    }
-
-    void consider(String value) {
-      if (!_isPrivateIpv4(value)) return;
-      if (!seen.add(value)) return;
-      final InternetAddress? parsed = _parseIp(value);
-      if (parsed != null) found.add(parsed);
-    }
-
-    try {
-      final List<NetworkInterface> list = await NetworkInterface.list(
-        type: InternetAddressType.IPv4,
-        includeLoopback: false,
-        includeLinkLocal: false,
-      );
-      for (final NetworkInterface interface in list) {
-        for (final InternetAddress address in interface.addresses) {
-          record('${interface.name}:${address.address}');
-          consider(address.address);
-        }
-      }
-    } catch (_) {
-      // No interface list at all; the probe below is the whole plan.
+    for (final _LanCandidate candidate in survey.lan) {
+      if (seen.add(candidate.address.address)) found.add(candidate.address);
     }
 
     if (found.isEmpty) {
@@ -680,17 +817,20 @@ class HostDiscoveryService {
           );
           final String address = socket.address.address;
           socket.destroy();
-          record('probe->$address');
-          consider(address);
+          survey.note('probe->$address');
           _usedProbeFallback = true;
-          if (found.isNotEmpty) break;
+          if (survey.nonLan.contains(address)) break;
+          if (!_isPrivateIpv4(address) || !seen.add(address)) break;
+          final InternetAddress? parsed = _parseIp(address);
+          if (parsed != null) found.add(parsed);
+          break;
         } catch (_) {
           // Offline or blocked; try the next well-known address.
         }
       }
     }
 
-    _interfaces = List<String>.unmodifiable(interfaces);
+    _interfaces = List<String>.unmodifiable(survey.seen);
     return found;
   }
 
@@ -699,9 +839,11 @@ class HostDiscoveryService {
   /// One `/24` per interface, never the interface's own address, and only in
   /// RFC 1918 space. Home and office Wi-Fi is overwhelmingly a `/24`, and the
   /// sweep only has to make *first-time* discovery work - a reconnect already
-  /// tries the remembered address directly. Restricting the sweep to private
-  /// ranges also keeps a cellular interface, whose address is carrier space,
-  /// from being walked at all.
+  /// tries the remembered address directly. The private-range test keeps a
+  /// carrier address out here, and [_nonLanInterfacePrefixes] keeps the
+  /// interface itself out of [locals] in the first place.
+  ///
+  /// The result is round-robined across subnets: see [_interleaveBySubnet].
   List<InternetAddress> _sweepFrom(List<InternetAddress> locals) {
     final Set<String> own = <String>{
       for (final InternetAddress address in locals) address.address,
@@ -762,7 +904,49 @@ class HostDiscoveryService {
       // 192.168.1.10 immediately before .8 when this device is at .9.
       return bHost.compareTo(aHost);
     });
-    return targets;
+    return _interleaveBySubnet(targets);
+  }
+
+  /// Round-robins [targets] across the `/24`s they belong to, keeping the order
+  /// inside each one.
+  ///
+  /// A sweep is budgeted by the socket, not by the clock: on the hotspot this
+  /// was measured on, `send()` accepted 41 datagrams and refused the other 971.
+  /// Ordering alone then decides whether the PC is among the 41, and a plain
+  /// sort spends the whole budget inside whichever subnet sorts first - which
+  /// on that phone was the carrier's, because `10.x` precedes `172.x` as a
+  /// string. Interleaving guarantees every candidate subnet gets a share, so
+  /// adding one unreachable interface can no longer hide the reachable one. On
+  /// the single-subnet case (the common one, and the one the pinned bind
+  /// produces) it returns the sorted list untouched.
+  static List<InternetAddress> _interleaveBySubnet(
+    List<InternetAddress> targets,
+  ) {
+    final Map<String, List<InternetAddress>> bySubnet =
+        <String, List<InternetAddress>>{};
+    for (final InternetAddress target in targets) {
+      final List<String> octets = target.address.split('.');
+      if (octets.length != 4) continue;
+      final String subnet = '${octets[0]}.${octets[1]}.${octets[2]}';
+      bySubnet.putIfAbsent(subnet, () => <InternetAddress>[]).add(target);
+    }
+    if (bySubnet.length < 2) return targets;
+
+    // `putIfAbsent` preserved insertion order, and the input was sorted by
+    // distance, so the subnet holding the nearest address is walked first.
+    final List<List<InternetAddress>> groups =
+        bySubnet.values.toList(growable: false);
+    final List<InternetAddress> ordered = <InternetAddress>[];
+    for (int index = 0;; index++) {
+      bool progressed = false;
+      for (final List<InternetAddress> group in groups) {
+        if (index >= group.length) continue;
+        ordered.add(group[index]);
+        progressed = true;
+      }
+      if (!progressed) break;
+    }
+    return ordered;
   }
 
   /// `10/8`, `172.16/12`, `192.168/16` - the ranges a home router hands out.
