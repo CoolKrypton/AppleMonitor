@@ -110,6 +110,7 @@ class DiscoveryReport {
     required this.broadcastTargets,
     required this.sent,
     required this.refused,
+    required this.phasesCut,
     required this.sendWouldBlock,
     required this.sendExceptions,
     required this.firstSendException,
@@ -150,6 +151,15 @@ class DiscoveryReport {
   final int sent;
   final int refused;
 
+  /// How many send phases stopped early because the socket stopped accepting.
+  ///
+  /// Non-zero is not a failure by itself - it is the sweep declining to keep
+  /// pushing datagrams into a queue that is already refusing them, which is
+  /// what used to turn one saturated socket into hundreds of dead sends. It is
+  /// reported so a sweep that ended far short of [sweepTargets] can be told
+  /// from a sweep that was never built.
+  final int phasesCut;
+
   /// Failed destinations split by `send()` returning zero versus throwing.
   final int sendWouldBlock;
   final int sendExceptions;
@@ -174,7 +184,10 @@ class DiscoveryReport {
         'subnets: ${locals.isEmpty ? 'none' : locals.join(' ')}'
         '${usedFallback ? ' (via TCP probe)' : ''}',
       )
-      ..writeln('targets: sweep=$sweepTargets broadcast=$broadcastTargets')
+      ..writeln(
+        'targets: sweep=$sweepTargets broadcast=$broadcastTargets '
+        'cut=$phasesCut',
+      )
       ..writeln(
         'sent: $sent   refused: $refused '
         '(zero=$sendWouldBlock exceptions=$sendExceptions'
@@ -186,18 +199,21 @@ class DiscoveryReport {
 
   /// The same facts on one line, sized for the two-line status caption.
   ///
-  /// Ordered by how much each field is worth: the send/receive counters, then
-  /// what the socket was bound to and which interfaces exist, then the target
-  /// counts. A caption that gets clipped still keeps the part that tells a
-  /// refused send from a swallowed one.
+  /// Ordered by how much each field is worth, because a clipped caption keeps
+  /// only its head: the send and receive counters first, then the size of the
+  /// sweep they describe, then what the socket was bound to and which
+  /// interfaces exist. The sweep size belongs that early - it is the difference
+  /// between walking a `/24` that a `/28` link can only refuse and walking the
+  /// thirteen addresses that link actually has, and telling those two apart
+  /// from the counters alone means knowing both.
   String get compact =>
       'tx=$sent err=$refused z0=$sendWouldBlock ex=$sendExceptions '
       '${firstSendException == null ? '' : 'why=$firstSendException '}'
       'rx=$received offer=$offers '
+      'swp=$sweepTargets cut=$phasesCut bc=$broadcastTargets '
       '| bind=$bound '
       'lan=${lanCandidates.isEmpty ? 'none' : lanCandidates.join(',')} '
       '| if=$interfaceNames '
-      '| swp=$sweepTargets bc=$broadcastTargets '
       '| loc=${locals.isEmpty ? 'none' : locals.join(',')}';
 
   /// Interface names only - the part of [interfaces] that identifies a tunnel
@@ -278,6 +294,7 @@ class HostDiscoveryService {
   bool _usedProbeFallback = false;
   int _sent = 0;
   int _refused = 0;
+  int _phasesCut = 0;
   int _sendWouldBlock = 0;
   int _sendExceptions = 0;
   String? _firstSendException;
@@ -603,15 +620,25 @@ class HostDiscoveryService {
     // both the likeliest to be delivered and the fastest.
     final InternetAddress? remembered = _parseIp(lastKnownHostIp ?? '');
 
-    // iOS only - see [_sweepLocalSubnet]. The sweep carries the probe alone:
-    // the directed `discovery.request` is already covered by the remembered
-    // address above, and repeating it 254 times would be pure noise. It also
-    // goes first, because it is the phase that has to carry discovery there.
-    if (_sweepLocalSubnet) {
-      await _phase(socket, _sweepTargets, <String>[probe]);
-    }
+    // It goes out *first*, before anything else has had a chance to fill the
+    // send queue. That ordering is the whole reason a hotspot can find a host
+    // at all: the sweep below is 253 datagrams on a link whose clients live in
+    // thirteen addresses, so most of it is answered with a refusal, and a
+    // datagram queued after those is refused along with them. Measured on the
+    // hotspot this came from, the remembered probe was the last send of a round
+    // and made it out only on the rounds where its ARP entry happened to be
+    // fresh - which is what "it finds the PC now and then" actually was.
+    // Discovery without a remembered host is unaffected: the sweep and the
+    // broadcast still run, just after this one datagram instead of before it.
     if (remembered != null) {
       await _phase(socket, <InternetAddress>[remembered], datagrams);
+    }
+
+    // iOS only - see [_sweepLocalSubnet]. The sweep carries the probe alone:
+    // the directed `discovery.request` is already covered by the remembered
+    // address above, and repeating it 254 times would be pure noise.
+    if (_sweepLocalSubnet) {
+      await _phase(socket, _sweepTargets, <String>[probe]);
     }
     // iOS must not send any UDP broadcast without Apple's multicast
     // entitlement. `send()` can report success while iOS silently discards
@@ -629,13 +656,29 @@ class HostDiscoveryService {
   /// in small batches: firing 254 datagrams at once is what a mobile stack and
   /// the answering host's receive buffer cope with worst, and a dropped batch
   /// costs nothing because the next round reshuffles the order.
+  ///
+  /// One thing does end it early: [_maxConsecutiveRefusals] datagrams in a row
+  /// that the socket will not take. A refused send is the queue saying it is
+  /// full, and a queue that is still full after the writability wait in
+  /// [_waitUntilWritable] is not going to accept the remaining 200 either - on
+  /// the hotspot this was measured on, 493 of 506 sends were refused that way.
+  /// Pushing the rest in costs seconds of the scan window and buries the socket
+  /// deeper, and every datagram after the first refusal is one the kernel would
+  /// have to materialise an unreachable neighbour for. Stopping is not giving
+  /// up on discovery: the destinations after the cut are exactly the ones the
+  /// link could not deliver to anyway.
   Future<void> _phase(
     RawDatagramSocket socket,
     List<InternetAddress> targets,
     List<String> datagrams,
   ) async {
     int inBatch = 0;
+    int refusedRun = 0;
     for (final InternetAddress target in targets) {
+      if (refusedRun >= _maxConsecutiveRefusals) {
+        _phasesCut++;
+        return;
+      }
       for (final String datagram in datagrams) {
         final Uint8List bytes = Uint8List.fromList(utf8.encode(datagram));
         if (bytes.length > Proto.maxDatagramBytes) continue;
@@ -663,6 +706,7 @@ class HostDiscoveryService {
         }
         if (queued) {
           _sent++;
+          refusedRun = 0;
         } else {
           // Count zero-return sends as refused too; incrementing tx before
           // checking the return value made a full failed sweep look successful.
@@ -675,6 +719,10 @@ class HostDiscoveryService {
             _firstSendException ??= 'short-send';
           } else if (wouldBlock) {
             _sendWouldBlock++;
+            // Only the queue being full counts toward the cut: a destination
+            // that throws is one address the link cannot reach, not a socket
+            // that has stopped accepting.
+            refusedRun++;
           }
         }
       }
@@ -693,6 +741,16 @@ class HostDiscoveryService {
   static const int _batchSize = 12;
   static const Duration _batchPause = Duration(milliseconds: 4);
   static const Duration _writeWaitTimeout = Duration(milliseconds: 12);
+
+  /// How many datagrams in a row the socket may refuse before a phase gives up.
+  ///
+  /// Reached only when the queue stays full across the writability wait, which
+  /// takes [_writeWaitTimeout] per datagram - so the cut lands roughly a third
+  /// of a second into a saturated socket. On a link that can take the traffic
+  /// the queue drains as fast as the kernel transmits it, and a run this long
+  /// never happens; on the hotspot the old code reached 493, and the datagrams
+  /// past the cut are ones the link had no address for in the first place.
+  static const int _maxConsecutiveRefusals = 32;
 
   Future<void> _waitUntilWritable(RawDatagramSocket socket) async {
     final Completer<void> ready = Completer<void>();
@@ -732,6 +790,7 @@ class HostDiscoveryService {
         broadcastTargets: _broadcastTargets.length,
         sent: _sent,
         refused: _refused,
+        phasesCut: _phasesCut,
         sendWouldBlock: _sendWouldBlock,
         sendExceptions: _sendExceptions,
         firstSendException: _firstSendException,
@@ -743,6 +802,7 @@ class HostDiscoveryService {
   void resetStats() {
     _sent = 0;
     _refused = 0;
+    _phasesCut = 0;
     _sendWouldBlock = 0;
     _sendExceptions = 0;
     _firstSendException = null;
@@ -834,14 +894,67 @@ class HostDiscoveryService {
     return found;
   }
 
-  /// Every usable address of the local `/24`s, for the fallback above.
+  /// The highest host number worth sweeping on [local]'s subnet.
   ///
-  /// One `/24` per interface, never the interface's own address, and only in
+  /// A sweep costs one datagram and one neighbour lookup per address, and an
+  /// address the link has no route for buys nothing back: the send is refused
+  /// once the queue fills and the ARP entry behind it can never resolve. An
+  /// iPhone hotspot is the case that made this matter - it runs a `/28`, so
+  /// clients get `172.20.10.2`-`172.20.10.14` and the other 240 addresses in
+  /// its `/24` are not merely empty, they are unreachable. Measured on exactly
+  /// that hotspot, `swp=253` produced `tx=13 err=493`: 97% of the sweep was
+  /// spent refusing, and the datagram to the PC was queued behind all of it.
+  ///
+  /// The interface name is the honest signal - `bridge100` and `ap1` are
+  /// Apple's hotspot interfaces and nothing else uses them - but the address
+  /// identifies the same link on its own, and a `/28` sweep there is correct
+  /// whichever way it is recognised. Everything else keeps the `/24`, so every
+  /// network this app has ever worked on is swept exactly as before.
+  ///
+  /// The address test is deliberately the exact hotspot address rather than the
+  /// whole `172.20.10.2`-`.14` band. That band is also what a *client* of an
+  /// ordinary `172.20.10.0/24` network would be leased, and shrinking the sweep
+  /// there would hide every host the router leased beyond `.14`. On the hotspot
+  /// the address is `.1` because the bridge itself holds it; on a real network
+  /// `.1` is the router, and nothing is ever leased it.
+  static int _sweepLimit(InternetAddress local, String? interfaceName) {
+    final bool hotspotInterface = interfaceName != null &&
+        (interfaceName.startsWith('bridge') || interfaceName.startsWith('ap'));
+    final List<String> octets = local.address.split('.');
+    final bool hotspotAddress = octets.length == 4 &&
+        octets[0] == '172' &&
+        octets[1] == '20' &&
+        octets[2] == '10' &&
+        octets[3] == '1';
+    return hotspotInterface || hotspotAddress ? 14 : 254;
+  }
+
+  /// The interface [address] came from, as the survey named it.
+  ///
+  /// The sweep needs it to size the subnet and the report already carries it;
+  /// looking it up here keeps [_sweepFrom] a function of the addresses alone.
+  String? _interfaceNameOf(InternetAddress address) {
+    for (final _LanCandidate candidate in _lanSeen) {
+      if (candidate.address.address == address.address) {
+        return candidate.interfaceName;
+      }
+    }
+    return null;
+  }
+
+  /// Every usable address of the local subnets, for the fallback above.
+  ///
+  /// One subnet per interface, never the interface's own address, and only in
   /// RFC 1918 space. Home and office Wi-Fi is overwhelmingly a `/24`, and the
   /// sweep only has to make *first-time* discovery work - a reconnect already
   /// tries the remembered address directly. The private-range test keeps a
   /// carrier address out here, and [_nonLanInterfacePrefixes] keeps the
   /// interface itself out of [locals] in the first place.
+  ///
+  /// The subnet is sized by [_sweepLimit] rather than assumed to be a `/24`:
+  /// an iPhone hotspot hands out thirteen addresses and has no others, so
+  /// walking 254 of them spends the socket's send budget on neighbours that do
+  /// not exist - see [_sweepLimit].
   ///
   /// The result is round-robined across subnets: see [_interleaveBySubnet].
   List<InternetAddress> _sweepFrom(List<InternetAddress> locals) {
@@ -854,7 +967,8 @@ class HostDiscoveryService {
       final List<String> octets = local.address.split('.');
       if (octets.length != 4) continue;
       final String prefix = '${octets[0]}.${octets[1]}.${octets[2]}';
-      for (int host = 1; host <= 254; host++) {
+      final int lastHost = _sweepLimit(local, _interfaceNameOf(local));
+      for (int host = 1; host <= lastHost; host++) {
         final String candidate = '$prefix.$host';
         if (own.contains(candidate) || !seen.add(candidate)) continue;
         targets.add(InternetAddress(candidate));
