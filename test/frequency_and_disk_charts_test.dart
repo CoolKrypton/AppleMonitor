@@ -92,12 +92,26 @@ void main() {
     return provider;
   }
 
-  Widget harness(Widget child) {
+  /// Builds the screen under test.
+  ///
+  /// [build] is a callback rather than a widget on purpose. In the app the
+  /// screens are rebuilt by an ancestor `ListenableBuilder` on the provider
+  /// (`main.dart`), so a test that pumps a screen directly has to reproduce
+  /// that or it is testing a still frame. Handing back the *same* widget
+  /// instance from a builder does not rebuild anything, though - Flutter skips
+  /// identical instances - so the screen has to be constructed per call.
+  Widget harness(Widget Function() build, {Listenable? listenable}) {
     return MonitorThemeScope(
       controller: ThemeController(),
       child: MaterialApp(
         home: ResponsiveBuilder(
-          builder: (BuildContext context, LayoutMetrics metrics) => child,
+          builder: (BuildContext context, LayoutMetrics metrics) =>
+              listenable == null
+                  ? build()
+                  : ListenableBuilder(
+                      listenable: listenable,
+                      builder: (BuildContext context, Widget? child) => build(),
+                    ),
         ),
       ),
     );
@@ -132,7 +146,7 @@ void main() {
       final MonitorProvider provider = liveProvider();
       addTearDown(provider.dispose);
 
-      await tester.pumpWidget(harness(dashboard(provider)));
+      await tester.pumpWidget(harness(() => dashboard(provider)));
       await tester.pump();
 
       expect(tester.takeException(), isNull);
@@ -146,7 +160,7 @@ void main() {
       final MonitorProvider provider = liveProvider();
       addTearDown(provider.dispose);
 
-      await tester.pumpWidget(harness(dashboard(provider)));
+      await tester.pumpWidget(harness(() => dashboard(provider)));
       await tester.pump();
 
       expect(tester.takeException(), isNull);
@@ -159,7 +173,7 @@ void main() {
       final MonitorProvider provider = liveProvider(withFrequency: false);
       addTearDown(provider.dispose);
 
-      await tester.pumpWidget(harness(dashboard(provider)));
+      await tester.pumpWidget(harness(() => dashboard(provider)));
       await tester.pump();
 
       expect(tester.takeException(), isNull);
@@ -235,7 +249,7 @@ void main() {
       addTearDown(provider.dispose);
 
       await tester.pumpWidget(harness(
-        DiskDetailScreen(provider: provider, onHome: () {}),
+        () => DiskDetailScreen(provider: provider, onHome: () {}),
       ));
       await tester.pump();
 
@@ -255,7 +269,8 @@ void main() {
       addTearDown(provider.dispose);
 
       await tester.pumpWidget(harness(
-        DiskDetailScreen(provider: provider, onHome: () {}),
+        () => DiskDetailScreen(provider: provider, onHome: () {}),
+        listenable: provider,
       ));
       await tester.pump();
 
@@ -277,7 +292,7 @@ void main() {
       addTearDown(provider.dispose);
 
       await tester.pumpWidget(harness(
-        DiskDetailScreen(provider: provider, onHome: () {}),
+        () => DiskDetailScreen(provider: provider, onHome: () {}),
       ));
       await tester.pump();
 
@@ -294,14 +309,15 @@ void main() {
       addTearDown(provider.dispose);
 
       await tester.pumpWidget(harness(
-        DiskDetailScreen(provider: provider, onHome: () {}),
+        () => DiskDetailScreen(provider: provider, onHome: () {}),
       ));
       await tester.pump();
 
       expect(tester.takeException(), isNull);
       expect(diskPlots(tester), isEmpty);
-      // The readings the curve would have displaced are still there.
-      expect(find.textContaining('Read'), findsWidgets);
+      // The readings the curve would have displaced are still there. `READ`
+      // upper-cased: MetricLine renders its label through toUpperCase().
+      expect(find.text('READ'), findsWidgets);
       expect(find.textContaining('Activity'), findsWidgets);
     });
 
@@ -315,7 +331,7 @@ void main() {
       addTearDown(provider.dispose);
 
       await tester.pumpWidget(harness(
-        DiskDetailScreen(provider: provider, onHome: () {}),
+        () => DiskDetailScreen(provider: provider, onHome: () {}),
       ));
       await tester.pump();
 
