@@ -75,6 +75,14 @@ class MonitorProvider extends ChangeNotifier {
   /// adapter switch - every card owns its own continuous series.
   final Map<String, List<double?>> _gpuHistories = <String, List<double?>>{};
 
+  /// Per-disk 60 s windows, keyed by [diskHistoryKey], feeding the read and
+  /// write curves on the disk detail cards. Read and write are kept apart
+  /// rather than summed: the card plots them as two lines, and a disk whose
+  /// write stalls while it keeps reading must not draw as one flat total.
+  final Map<String, List<double?>> _diskReadHistories = <String, List<double?>>{};
+  final Map<String, List<double?>> _diskWriteHistories =
+      <String, List<double?>>{};
+
   /// protocol id currently feeding the GPU sparkline. A change clears history.
   String _historyGpuId = '';
 
@@ -123,6 +131,24 @@ class MonitorProvider extends ChangeNotifier {
   List<double?> gpuHistoryFor(String protocolId) => List<double?>.unmodifiable(
         _gpuHistories[protocolId] ?? const <double?>[],
       );
+
+  /// The 60 s read / write windows belonging to one disk (empty when it has
+  /// never been sampled). Used by the disk detail cards.
+  List<double?> diskReadHistoryFor(String key) => List<double?>.unmodifiable(
+        _diskReadHistories[key] ?? const <double?>[],
+      );
+
+  List<double?> diskWriteHistoryFor(String key) => List<double?>.unmodifiable(
+        _diskWriteHistories[key] ?? const <double?>[],
+      );
+
+  /// The key a disk's windows are filed under.
+  ///
+  /// The protocol id when the host sends one, else the name - the same pairing
+  /// rule the disk card uses to match a disk across snapshots, so a host that
+  /// omits ids still gets a curve and two disks never share one window.
+  static String diskHistoryKey(DiskStatus disk) =>
+      disk.protocolId.isNotEmpty ? disk.protocolId : disk.name;
 
   GpuSelectionService get gpuSelection => _gpuSelection;
 
@@ -225,6 +251,8 @@ class MonitorProvider extends ChangeNotifier {
     _cpuHistory.clear();
     _gpuHistory.clear();
     _gpuHistories.clear();
+    _diskReadHistories.clear();
+    _diskWriteHistories.clear();
     _historyGpuId = '';
     _cpuUsageTarget = 0;
     _cpuUsageTargetValid = false;
@@ -357,21 +385,44 @@ class MonitorProvider extends ChangeNotifier {
     // Every adapter gets a window of its own so the device list can draw a
     // curve per card. These are deliberately independent of the switch above.
     for (final GpuStatus adapter in status.gpus) {
-      final String id = adapter.protocolId;
-      if (id.isEmpty) continue;
-      // growable: true is load-bearing. List.filled defaults to a fixed
-      // length, so the series.add(...) below threw UnsupportedError on the
-      // first adapter - leaving that adapter stuck with an all-null window
-      // (grid but no curve on its card) and aborting the loop before the
-      // remaining adapters ever got a window at all (completely blank cards).
-      final List<double?> series = _gpuHistories.putIfAbsent(
-        id,
-        () => List<double?>.filled(kDashboardHistoryPoints, null, growable: true),
-      );
-      series.add(plotValueFor(adapter));
-      while (series.length > kDashboardHistoryPoints) {
-        series.removeAt(0);
-      }
+      _advance(_gpuHistories, adapter.protocolId, plotValueFor(adapter));
+    }
+
+    // Same idea for the physical disks, one window per direction - the disk
+    // detail card plots read and write as two curves on one 60 s plot.
+    for (final DiskStatus disk in status.disks) {
+      final String key = diskHistoryKey(disk);
+      _advance(_diskReadHistories, key, disk.readValid ? disk.readMbS : null);
+      _advance(_diskWriteHistories, key, disk.writeValid ? disk.writeMbS : null);
+    }
+  }
+
+  /// Appends one sample to a rolling window, retiring the oldest point.
+  ///
+  /// One helper for every series: the GPU windows and the disk windows have to
+  /// age identically, and they used to be written out by hand.
+  ///
+  /// An empty [key] means the host sent no id for that device; there is nothing
+  /// to file the sample under, so it is dropped rather than pooling every
+  /// unidentified device into one window.
+  static void _advance(
+    Map<String, List<double?>> store,
+    String key,
+    double? value,
+  ) {
+    if (key.isEmpty) return;
+    // growable: true is load-bearing. List.filled defaults to a fixed length,
+    // so the series.add(...) below threw UnsupportedError on the first series
+    // that used it - leaving that one stuck with an all-null window (grid but
+    // no curve on its card) and aborting the loop before the remaining series
+    // ever got a window at all (completely blank cards).
+    final List<double?> series = store.putIfAbsent(
+      key,
+      () => List<double?>.filled(kDashboardHistoryPoints, null, growable: true),
+    );
+    series.add(value);
+    while (series.length > kDashboardHistoryPoints) {
+      series.removeAt(0);
     }
   }
 

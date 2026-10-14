@@ -170,6 +170,7 @@ class DiskDetailScreen extends StatelessWidget {
                   }
                   final DiskStatus disk = target.disks[index];
                   final DiskStatus? displayDisk = _matchDisk(display, disk);
+                  final String historyKey = MonitorProvider.diskHistoryKey(disk);
                   return Padding(
                     padding: EdgeInsets.only(
                       right: column == columns - 1 ? 0 : metrics.gutter,
@@ -182,6 +183,9 @@ class DiskDetailScreen extends StatelessWidget {
                         child: _DiskCard(
                           disk: disk,
                           displayDisk: displayDisk,
+                          readHistory: provider.diskReadHistoryFor(historyKey),
+                          writeHistory: provider.diskWriteHistoryFor(historyKey),
+                          showChart: _showsChart(metrics, cardHeight),
                         ),
                       ),
                     ),
@@ -210,13 +214,43 @@ class DiskDetailScreen extends StatelessWidget {
     }
     return null;
   }
+
+  /// Whether a card gets the throughput plot.
+  ///
+  /// Portrait only. The plot is the only part of the card that can be given up
+  /// without losing a reading, and landscape is exactly where the card has no
+  /// height to give: there the grid is two or three columns of short cards, so
+  /// a curve would cost the card its numbers instead of filling slack.
+  ///
+  /// [kChartMinCardHeight] is the height at which a card can carry the caption,
+  /// the plot and its own six lines without any of them being squeezed -
+  /// measured against the card's content, not guessed. Below it the card keeps
+  /// its numbers and drops the plot, which is the honest trade for a phone with
+  /// more disks than screen.
+  static const double kChartMinCardHeight = 150.0;
+
+  static bool _showsChart(LayoutMetrics metrics, double cardHeight) =>
+      metrics.isPortrait && cardHeight >= kChartMinCardHeight;
 }
 
 class _DiskCard extends StatelessWidget {
-  const _DiskCard({required this.disk, required this.displayDisk});
+  const _DiskCard({
+    required this.disk,
+    required this.displayDisk,
+    required this.readHistory,
+    required this.writeHistory,
+    required this.showChart,
+  });
 
   final DiskStatus disk;
   final DiskStatus? displayDisk;
+
+  /// This disk's own 60 s windows, drawn as the card's dynamic plot.
+  final List<double?> readHistory;
+  final List<double?> writeHistory;
+
+  /// Portrait cards only: whether the card is tall enough to carry the plot.
+  final bool showChart;
 
   @override
   Widget build(BuildContext context) {
@@ -278,6 +312,22 @@ class _DiskCard extends StatelessWidget {
               ),
             ],
           ),
+          // The curve sits directly under the two numbers it is the history
+          // of, in the same two colours, and takes whatever height the card
+          // was given beyond its text: that dead band is what the tall
+          // portrait card had, and the reason the plot lives here at all.
+          if (showChart)
+            Expanded(
+              child: Padding(
+                padding: EdgeInsets.only(top: metrics.px(8)),
+                child: DiskIoChart(
+                  readPoints: readHistory,
+                  writePoints: writeHistory,
+                  readColor: theme.cpu,
+                  writeColor: theme.gpu,
+                ),
+              ),
+            ),
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
@@ -331,16 +381,107 @@ class _DiskCard extends StatelessWidget {
   }
 }
 
-/// The per-disk throughput sparkline shown in the wide layout, retained as a
-/// building block for a future disk-detail expansion.
-class DiskSparkline extends StatelessWidget {
-  const DiskSparkline({super.key, required this.points, required this.color});
+/// The per-disk dynamic plot: read and write throughput over the last 60 s.
+///
+/// Replaces the unused `DiskSparkline` stub that stood here - it was left as a
+/// placeholder for exactly this expansion, and it had a hard-coded 0..100
+/// scale that only made sense while the plot was going to be activity, not
+/// throughput.
+///
+/// Read and write share one plot because they share one unit and one disk:
+/// separate plots would halve the resolution of both, and a stacked one would
+/// make the two indistinguishable at this size. The colours are the card's own
+/// Read and Write colours, so the legend is a restatement rather than news.
+class DiskIoChart extends StatelessWidget {
+  const DiskIoChart({
+    super.key,
+    required this.readPoints,
+    required this.writePoints,
+    required this.readColor,
+    required this.writeColor,
+  });
 
-  final List<double?> points;
+  final List<double?> readPoints;
+  final List<double?> writePoints;
+  final Color readColor;
+  final Color writeColor;
+
+  @override
+  Widget build(BuildContext context) {
+    final MonitorTheme theme = context.theme;
+    final LayoutMetrics metrics = context.layout;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        Row(
+          children: <Widget>[
+            Text(
+              '60s',
+              style: TextStyle(
+                color: theme.muted,
+                fontSize: metrics.font(9),
+                letterSpacing: 0.6,
+              ),
+            ),
+            const Spacer(),
+            _SeriesKey(label: 'READ', color: readColor),
+            SizedBox(width: metrics.px(8)),
+            _SeriesKey(label: 'WRITE', color: writeColor),
+          ],
+        ),
+        SizedBox(height: metrics.px(4)),
+        Expanded(
+          child: Sparkline(
+            points: readPoints,
+            color: readColor,
+            secondaryPoints: writePoints,
+            secondaryColor: writeColor,
+            maxY: sparklineCeiling(<List<double?>>[readPoints, writePoints]),
+            strokeWidth: 1.3,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// One entry of the plot's legend: a short dash in the series colour and its
+/// name. Sized to stay legible next to the axis label without becoming the
+/// loudest thing on the card.
+class _SeriesKey extends StatelessWidget {
+  const _SeriesKey({required this.label, required this.color});
+
+  final String label;
   final Color color;
 
   @override
   Widget build(BuildContext context) {
-    return Sparkline(points: points, color: color, maxY: 100);
+    final MonitorTheme theme = context.theme;
+    final LayoutMetrics metrics = context.layout;
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        Container(
+          width: metrics.px(8),
+          height: metrics.px(2.5),
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: BorderRadius.circular(metrics.px(1.5)),
+          ),
+        ),
+        SizedBox(width: metrics.px(4)),
+        Text(
+          label,
+          style: TextStyle(
+            color: theme.muted,
+            fontSize: metrics.font(9),
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0.6,
+          ),
+        ),
+      ],
+    );
   }
 }

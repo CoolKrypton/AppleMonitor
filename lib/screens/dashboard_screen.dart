@@ -114,6 +114,7 @@ class ProcessorCard extends StatelessWidget {
     required this.displayUsage,
     required this.history,
     required this.onTap,
+    this.clockText,
     this.compact = false,
   });
 
@@ -128,6 +129,10 @@ class ProcessorCard extends StatelessWidget {
   final Color accent;
   final String detailText;
   final bool detailHot;
+
+  /// The processor's live clock, shown at the end of the sensor row. `null`
+  /// leaves that end empty, which is what the GPU card wants.
+  final String? clockText;
 
   /// Smoothed value driving the bar (the number itself uses [usage]).
   final double displayUsage;
@@ -150,7 +155,11 @@ class ProcessorCard extends StatelessWidget {
       glow: 0.55,
       padding: EdgeInsets.all(metrics.panelPadding),
       onTap: onTap,
-      semanticLabel: '$title ${tag.isEmpty ? '' : tag}',
+      semanticLabel: <String>[
+        title,
+        if (tag.isNotEmpty) tag,
+        if (clockText != null) clockText!,
+      ].join(' '),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
@@ -245,16 +254,48 @@ class ProcessorCard extends StatelessWidget {
             ],
           ),
           SizedBox(height: metrics.px(6)),
-          Text(
-            detailText,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: detailHot ? theme.hot : theme.muted,
-              fontSize: metrics.font(metrics.isLandscape ? 11 : 12),
-              fontWeight: FontWeight.w600,
-              fontFeatures: const <FontFeature>[FontFeature.tabularFigures()],
-            ),
+          // Sensor row: thermals and power on the left, the clock at the far
+          // right. Same type, same tabular figures, no badge and no second
+          // accent colour - the clock is another reading off the same strip,
+          // not a callout, so it must not compete with the percentage above
+          // it. It is the one reading that says what the chip is *doing*
+          // rather than how hard it is working, which is why it gets its own
+          // end of the row instead of being appended to the run of
+          // slash-separated values.
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: Text(
+                  detailText,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: detailHot ? theme.hot : theme.muted,
+                    fontSize: metrics.font(metrics.isLandscape ? 11 : 12),
+                    fontWeight: FontWeight.w600,
+                    fontFeatures: const <FontFeature>[
+                      FontFeature.tabularFigures(),
+                    ],
+                  ),
+                ),
+              ),
+              if (clockText != null) ...<Widget>[
+                SizedBox(width: metrics.px(10)),
+                Text(
+                  clockText!,
+                  maxLines: 1,
+                  style: TextStyle(
+                    color: theme.text.withValues(alpha: 0.78),
+                    fontSize: metrics.font(metrics.isLandscape ? 11 : 12),
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.2,
+                    fontFeatures: const <FontFeature>[
+                      FontFeature.tabularFigures(),
+                    ],
+                  ),
+                ),
+              ],
+            ],
           ),
           SizedBox(height: metrics.px(metrics.isLandscape ? 6 : 8)),
           HudBar(
@@ -547,6 +588,7 @@ class DashboardData {
     required this.cpuDisplayUsage,
     required this.cpuDetail,
     required this.cpuDetailHot,
+    required this.cpuClock,
     required this.gpuTitle,
     required this.gpuTag,
     required this.gpuModel,
@@ -579,6 +621,11 @@ class DashboardData {
   final double cpuDisplayUsage;
   final String cpuDetail;
   final bool cpuDetailHot;
+
+  /// The CPU's live clock, e.g. `4.30 GHz` (`-- GHz` when the host does not
+  /// report one). The GPU card has no such line - its buses are not clocked
+  /// the way a processor is, so there is nothing honest to put there.
+  final String cpuClock;
 
   final String gpuTitle;
   final String gpuTag;
@@ -653,6 +700,7 @@ class DashboardData {
       cpuDetail: '${fmtTempShort(target.cpuTemp, target.cpuTempValid)} C   /   '
           '${fmtPowerShort(target.cpuPower, target.cpuPowerValid)} W',
       cpuDetailHot: isHot(target.cpuTemp, target.cpuTempValid),
+      cpuClock: fmtClock(target.cpuClock, target.cpuClockValid),
       gpuTitle: 'GPU',
       gpuTag: gpuTag,
       gpuModel: gpu == null
@@ -805,6 +853,7 @@ class _CompactDashboard extends StatelessWidget {
                     accent: theme.cpu,
                     detailText: data.cpuDetail,
                     detailHot: data.cpuDetailHot,
+                    clockText: data.cpuClock,
                     history: data.cpuHistory,
                     onTap: onOpenCpu,
                     compact: true,
@@ -913,6 +962,7 @@ class _GridDashboard extends StatelessWidget {
                   accent: theme.cpu,
                   detailText: data.cpuDetail,
                   detailHot: data.cpuDetailHot,
+                  clockText: data.cpuClock,
                   history: data.cpuHistory,
                   onTap: onOpenCpu,
                 ),
