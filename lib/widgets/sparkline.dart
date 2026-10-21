@@ -238,8 +238,9 @@ class _SparklinePainter extends CustomPainter {
 
     double xFor(int index) {
       if (!byTime) return index * stepX;
-      final double fraction =
-          (seriesTimes![index] - domainStart) / windowMs;
+      // `byTime` implies the list is there and is index-aligned with the
+      // series, which is exactly the RangeError this guard exists to avoid.
+      final double fraction = (seriesTimes[index] - domainStart) / windowMs;
       // Samples older than the window can only arrive with a clock jump; they
       // belong at the left edge, not off-canvas.
       final double clamped = fraction <= 0 ? 0 : (fraction >= 1 ? 1 : fraction);
