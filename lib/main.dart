@@ -9,8 +9,10 @@ import 'screens/monitor_shell.dart';
 import 'services/host_connection.dart';
 import 'services/monitor_provider.dart';
 import 'services/pairing_store.dart';
+import 'services/tap_sound.dart';
 import 'theme/monitor_theme.dart';
 import 'theme/theme_context.dart';
+import 'widgets/tap_sound_listener.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -63,6 +65,12 @@ class _PcMonitorAppState extends State<PcMonitorApp> {
       ThemeController(initial: themeForId(widget.initialThemeId));
   late final MonitorProvider _provider;
   late final HostConnectionController _connection;
+
+  /// The tap effect. Loading it is deliberately not awaited: a monitor that
+  /// cannot play a click still monitors, so a slow or missing audio session
+  /// must never hold up the splash screen.
+  late final TapSoundController _tapSound = TapSoundController(store: _store);
+
   late final Future<void> _bootstrap;
 
   @override
@@ -83,6 +91,7 @@ class _PcMonitorAppState extends State<PcMonitorApp> {
     _themeController.addListener(_persistTheme);
     _bootstrap = _connection.start();
     _publishLinkState();
+    unawaited(_tapSound.load());
   }
 
   /// Every path that changes the skin - the picker sheet and the long-press
@@ -113,88 +122,99 @@ class _PcMonitorAppState extends State<PcMonitorApp> {
     _provider.dispose();
     _themeController.removeListener(_persistTheme);
     _themeController.dispose();
+    _tapSound.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return MonitorThemeScope(
-      controller: _themeController,
-      child: ListenableBuilder(
-        listenable: _themeController,
-        builder: (BuildContext context, Widget? child) {
-          final MonitorTheme theme = _themeController.theme;
-          return MaterialApp(
-            title: 'PC Monitor',
-            debugShowCheckedModeBanner: false,
-            theme: theme.toThemeData(),
-            // The UI is portrait-and-landscape aware by design, so no
-            // orientation lock is applied.
-            builder: (BuildContext context, Widget? child) {
-              // Keeps the status bar legible against every theme, and applies
-              // the brightness the PC asked for. `device.settings.set` maps to
-              // an overlay here because Android gives no app-level backlight
-              // control without a privileged permission.
-              //
-              // The DefaultTextStyle wrapper anchors the merge base for every
-              // Text in the tree with an explicit `decoration: none`. On
-              // Huawei/EMUI devices, labels that live outside a Material
-              // subtree otherwise inherit the platform's underline paint flag
-              // and render with a pure-yellow double underline.
-              return DefaultTextStyle(
-                style: const TextStyle(decoration: TextDecoration.none),
-                child: AnnotatedRegion<SystemUiOverlayStyle>(
-                value: theme.isDark
-                    ? SystemUiOverlayStyle.light
-                    : SystemUiOverlayStyle.dark,
-                child: AnimatedBuilder(
-                  animation: _connection,
-                  builder: (BuildContext context, Widget? _) {
-                    final double dim = _connection.dimOverlay;
-                    return Stack(
-                      children: <Widget>[
-                        if (child != null) child,
-                        if (dim > 0.001)
-                          Positioned.fill(
-                            child: IgnorePointer(
-                              child: ColoredBox(
-                                color: Colors.black.withValues(alpha: dim),
-                              ),
-                            ),
-                          ),
-                      ],
-                    );
-                  },
-                ),
-                ),
-              );
-            },
-            home: FutureBuilder<void>(
-              future: _bootstrap,
-              builder: (BuildContext context, AsyncSnapshot<void> snapshot) {
-                if (snapshot.connectionState != ConnectionState.done) {
-                  return const SplashScreen();
-                }
-                return AnimatedBuilder(
-                  animation: _provider,
-                  builder: (BuildContext context, Widget? child) {
-                    return ResponsiveBuilder(
-                      builder: (BuildContext context, LayoutMetrics metrics) {
-                        return MonitorShell(
-                          provider: _provider,
-                          connection: _connection,
-                          // A phone that has never paired opens straight onto
-                          // the discovery page: there is nothing to show yet.
-                          startOnHosts: _connection.pairedHost == null,
-                        );
-                      },
-                    );
-                  },
+    return TapSoundScope(
+      controller: _tapSound,
+      child: MonitorThemeScope(
+        controller: _themeController,
+        child: ListenableBuilder(
+          listenable: _themeController,
+          builder: (BuildContext context, Widget? child) {
+            final MonitorTheme theme = _themeController.theme;
+            return MaterialApp(
+              title: 'PC Monitor',
+              debugShowCheckedModeBanner: false,
+              theme: theme.toThemeData(),
+              // The UI is portrait-and-landscape aware by design, so no
+              // orientation lock is applied.
+              builder: (BuildContext context, Widget? child) {
+                // Keeps the status bar legible against every theme, and applies
+                // the brightness the PC asked for. `device.settings.set` maps to
+                // an overlay here because Android gives no app-level backlight
+                // control without a privileged permission.
+                //
+                // The DefaultTextStyle wrapper anchors the merge base for every
+                // Text in the tree with an explicit `decoration: none`. On
+                // Huawei/EMUI devices, labels that live outside a Material
+                // subtree otherwise inherit the platform's underline paint flag
+                // and render with a pure-yellow double underline.
+                //
+                // TapSoundListener wraps the Navigator's child rather than the
+                // app: sitting inside MaterialApp is what lets it hear taps on
+                // modal routes (the settings sheet) as well as on the pages.
+                return TapSoundListener(
+                  child: DefaultTextStyle(
+                    style: const TextStyle(decoration: TextDecoration.none),
+                    child: AnnotatedRegion<SystemUiOverlayStyle>(
+                      value: theme.isDark
+                          ? SystemUiOverlayStyle.light
+                          : SystemUiOverlayStyle.dark,
+                      child: AnimatedBuilder(
+                        animation: _connection,
+                        builder: (BuildContext context, Widget? _) {
+                          final double dim = _connection.dimOverlay;
+                          return Stack(
+                            children: <Widget>[
+                              if (child != null) child,
+                              if (dim > 0.001)
+                                Positioned.fill(
+                                  child: IgnorePointer(
+                                    child: ColoredBox(
+                                      color:
+                                          Colors.black.withValues(alpha: dim),
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          );
+                        },
+                      ),
+                    ),
+                  ),
                 );
               },
-            ),
-          );
-        },
+              home: FutureBuilder<void>(
+                future: _bootstrap,
+                builder: (BuildContext context, AsyncSnapshot<void> snapshot) {
+                  if (snapshot.connectionState != ConnectionState.done) {
+                    return const SplashScreen();
+                  }
+                  return AnimatedBuilder(
+                    animation: _provider,
+                    builder: (BuildContext context, Widget? child) {
+                      return ResponsiveBuilder(
+                        builder: (BuildContext context, LayoutMetrics metrics) {
+                          return MonitorShell(
+                            provider: _provider,
+                            connection: _connection,
+                            // A phone that has never paired opens straight onto
+                            // the discovery page: there is nothing to show yet.
+                            startOnHosts: _connection.pairedHost == null,
+                          );
+                        },
+                      );
+                    },
+                  );
+                },
+              ),
+            );
+          },
+        ),
       ),
     );
   }

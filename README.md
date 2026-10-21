@@ -17,8 +17,9 @@ platforms.
 the phone discovers the PC on the LAN, pairs with it, and then streams the same
 `telemetry.snapshot` feed over a WebSocket.
 
-The whole protocol stack is in-tree: the only runtime dependency beyond Flutter
-itself is `shared_preferences` (the pairing store). Sockets, the RFC 6455
+The whole protocol stack is in-tree: the runtime dependencies beyond Flutter
+itself are `shared_preferences` (the pairing store) and `audioplayers` (the one
+thing Flutter cannot do without a plugin: play a bundled sound). Sockets, the RFC 6455
 client, SHA-256/HMAC and the JSON envelope are all hand-written, because the
 app speaks exactly one protocol to exactly one kind of peer.
 
@@ -39,7 +40,8 @@ lib/
     host_connect_screen.dart     host discovery / pairing / link page
   services/
     protocol.dart                envelope V1 codec + payload validation
-    monitor_provider.dart        sample pump, 60 s history, GPU selection
+    monitor_provider.dart        sample pump, 60 s adaptive history, GPU select
+    tap_sound.dart               tap effect: preference, pre-loaded voices
     display_smoother.dart        20 Hz bar easing (display_smoother.c port)
     smoothing_config.dart        tau / threshold table, 1:1 with the firmware
     gpu_selection_service.dart   adapter choice, keyed by protocol id
@@ -57,12 +59,14 @@ lib/
     format.dart                  every firmware formatter, incl. placeholders
   widgets/
     hud.dart                     HUD panel, chamfer, bars, badges, background
-    sparkline.dart               60-point history graph (null = gap)
+    sparkline.dart               history graph (null = gap), 60 s window
     monitor_scaffold.dart        command bar + side rail
-    theme_picker_sheet.dart      theme switcher
+    settings_sheet.dart          settings: tap effect + theme switcher
+    tap_sound_listener.dart      plays the effect for taps anywhere in the tree
 test/
   logic_test.dart                firmware-parity behaviour tests
   widget_smoke_test.dart         boot + layout + theme smoke tests
+  sound_and_history_window_test.dart  tap effect + 60 s adaptive window
 ```
 
 ## Running it
@@ -172,9 +176,13 @@ These were carried over deliberately; please keep them if you extend the UI.
   `-- GiB`, `--`) — never `0`, and never a value derived from a different sensor.
 - **GPU identity is `protocolId`.** Never index into `gpus[]` to identify an
   adapter. `findGpu('')` intentionally never matches.
-- **60 s history is a fixed window.** `kDashboardHistoryPoints == 60`; a `null`
-  slot renders as a gap, matching `LV_CHART_POINT_NONE`. Switching adapters
-  clears the history.
+- **60 s history is a duration, not a point count.** The firmware holds 60
+  samples because it samples at 1 Hz; the app measures the host's actual
+  cadence and derives the slot count from it (`kHistoryWindow == 60 s`, so 60
+  points at 1 Hz, 240 at 4 Hz, 30 at 0.5 Hz, clamped to 12…600). A `null` slot
+  renders as a gap, matching `LV_CHART_POINT_NONE`. Switching adapters clears
+  the history, and so does a change of stream: the cadence belongs to the link
+  that produced it.
 - **Two update cadences.** Text and graphs follow the host sample rate; the bars
   ease at 20 Hz through `DisplaySmoother`, so they stay smooth between samples.
 - **Temperature alarm at 85 °C** (`isHot`), and only when the reading is valid.
@@ -219,9 +227,23 @@ Filling the rectangle is a first-class rule:
   the available *width*, so a landscape phone lays five metrics out in one row
   instead of two cramped ones.
 
+## Settings
+
+The sliders button in the command bar opens the settings sheet - the app's only
+settings surface, deliberately off the dashboard, where every panel is a live
+reading.
+
+* **Tap sounds** - a short, muffled underwater "bloop" on every tap, on by
+  default, remembered across launches. The effect is synthesised (44.1 kHz mono
+  WAV in `assets/sfx/`); its recipe is documented at the top of
+  `lib/services/tap_sound.dart`. One listener at the app root plays it for taps
+  anywhere - pages and modal sheets alike - while a drag or a long press stays
+  silent.
+* **Interface theme** - the six skins below.
+
 ## Themes
 
-Six are built in, switchable from the command bar on any page:
+Six are built in, switchable from the settings sheet on any page:
 
 | Theme | Description |
 | --- | --- |

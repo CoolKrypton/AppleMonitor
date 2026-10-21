@@ -8,7 +8,7 @@ import '../theme/monitor_theme.dart';
 import '../theme/theme_context.dart';
 import '../util/format.dart';
 import '../widgets/hud.dart';
-import '../widgets/theme_picker_sheet.dart';
+import '../widgets/settings_sheet.dart';
 import 'cpu_detail_screen.dart';
 import 'dashboard_screen.dart';
 import 'disk_detail_screen.dart';
@@ -286,7 +286,7 @@ class DashboardStatusBar extends StatelessWidget {
             ),
           ),
           SizedBox(width: metrics.px(6)),
-          _ThemeButton(provider: provider),
+          _SettingsButton(provider: provider),
         ],
       ),
     );
@@ -336,8 +336,14 @@ class _ClockReadout extends StatelessWidget {
   }
 }
 
-class _ThemeButton extends StatelessWidget {
-  const _ThemeButton({required this.provider});
+/// Opens the settings sheet from the command bar.
+///
+/// It used to be a palette glyph, when the only thing in the sheet was the
+/// skin. Now that the tap effect lives there too, the entry point is the
+/// generic sliders icon - the sheet is the app's settings surface, not a theme
+/// picker with an extra row bolted on.
+class _SettingsButton extends StatelessWidget {
+  const _SettingsButton({required this.provider});
 
   final MonitorProvider provider;
 
@@ -346,18 +352,18 @@ class _ThemeButton extends StatelessWidget {
     final MonitorTheme theme = context.theme;
     final LayoutMetrics metrics = context.layout;
     return Tooltip(
-      message: 'Interface theme',
+      message: 'Settings',
       // Same reason as the status bar's host badge: an InkWell needs a Material
       // ancestor, and this row lives outside every HudPanel.
       child: Material(
         color: Colors.transparent,
         child: InkWell(
           borderRadius: BorderRadius.circular(6),
-          onTap: () => ThemePickerSheet.show(context),
+          onTap: () => SettingsSheet.show(context),
           child: Padding(
             padding: EdgeInsets.all(metrics.px(4)),
             child: Icon(
-              Icons.palette_outlined,
+              Icons.tune,
               color: theme.cpu,
               size: metrics.px(17),
             ),

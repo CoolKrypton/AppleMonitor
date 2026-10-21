@@ -311,42 +311,22 @@ class ProcessorCard extends StatelessWidget {
           // dead band at the bottom. On the compact column it also has to be
           // able to collapse to nothing - the column fills the viewport and a
           // hard minimum here would turn a tight screen into an overflow.
+          //
+          // No "60s" caption beside the plot: it cost a 28 pt gutter plus its
+          // gap out of a card that is already height-starved, and it never
+          // changed - the window is always [kHistoryWindow] long, so the label
+          // said the same thing on every frame while pushing the curve itself
+          // 34 pt to the right.
           Expanded(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: <Widget>[
-                // The label is boxed (rather than merely aligned) so it can
-                // shrink with the row instead of forcing it taller.
-                SizedBox(
-                  width: metrics.px(28),
-                  child: FittedBox(
-                    fit: BoxFit.scaleDown,
-                    alignment: Alignment.bottomLeft,
-                    child: Text(
-                      '60s',
-                      maxLines: 1,
-                      style: TextStyle(
-                        color: theme.muted,
-                        fontSize: metrics.font(9),
-                        letterSpacing: 0.6,
-                      ),
-                    ),
-                  ),
-                ),
-                SizedBox(width: metrics.px(6)),
-                Expanded(
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                      minHeight: compact ? 0 : metrics.px(28),
-                    ),
-                    child: Sparkline(
-                      points: history,
-                      color: accent,
-                      thresholdColor: theme.hot,
-                    ),
-                  ),
-                ),
-              ],
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                minHeight: compact ? 0 : metrics.px(28),
+              ),
+              child: Sparkline(
+                points: history,
+                color: accent,
+                thresholdColor: theme.hot,
+              ),
             ),
           ),
         ],

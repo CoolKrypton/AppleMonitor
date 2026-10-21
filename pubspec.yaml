@@ -3,7 +3,7 @@ description: PC Monitor - iOS client for the PCMonitorHost telemetry agent.
 publish_to: "none"
 
 # Version format: <host-protocol-ish year>.<month>.<day> + build number.
-version: 2026.10.10+9
+version: 2026.10.21+10
 
 environment:
   sdk: ">=3.4.0 <4.0.0"
@@ -18,6 +18,11 @@ dependencies:
   # Persists the pairing secret and the device identity across restarts.
   # Everything else - the protocol, SHA-256/HMAC and the sockets - is in-tree.
   shared_preferences: ^2.3.2
+
+  # Plays the tap effect (assets/sfx/tap_bubble.wav). The only audio dependency
+  # in the tree, and the only reason a plugin other than shared_preferences is
+  # here: Flutter has no built-in way to play a bundled sound file.
+  audioplayers: ^6.8.1
 
 dev_dependencies:
   flutter_test:
@@ -54,3 +59,7 @@ flutter:
 
   assets:
     - assets/fonts/
+    # The tap effect: a synthesised 0.36 s muffled bubble. Kept as a WAV
+    # because the file is small, has no decoder cost, and its recipe is
+    # documented in lib/services/tap_sound.dart.
+    - assets/sfx/

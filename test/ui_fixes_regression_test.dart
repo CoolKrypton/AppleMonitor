@@ -17,7 +17,7 @@ import 'package:pcm_monitor/services/pairing_store.dart';
 import 'package:pcm_monitor/theme/monitor_theme.dart';
 import 'package:pcm_monitor/widgets/hud.dart';
 import 'package:pcm_monitor/widgets/sparkline.dart';
-import 'package:pcm_monitor/widgets/theme_picker_sheet.dart';
+import 'package:pcm_monitor/widgets/settings_sheet.dart';
 
 /// Regression tests for the 2026-10-09 device-verification fix round.
 ///
@@ -477,7 +477,7 @@ void main() {
       addTearDown(controller.dispose);
 
       await tester.pumpWidget(harness(
-        const Scaffold(body: ThemePickerSheet()),
+        const Scaffold(body: SettingsSheet()),
         controller: controller,
       ));
       await tester.pump();
@@ -499,7 +499,7 @@ void main() {
       addTearDown(controller.dispose);
 
       await tester.pumpWidget(harness(
-        const Scaffold(body: ThemePickerSheet()),
+        const Scaffold(body: SettingsSheet()),
         controller: controller,
       ));
       await tester.pump();
