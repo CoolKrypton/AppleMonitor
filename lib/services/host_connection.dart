@@ -58,8 +58,10 @@ class HostConnectionController extends ChangeNotifier {
   final PairingStore _store;
   final HostDiscoveryService _discovery;
 
-  /// Where telemetry goes. Replaced whenever the link reconnects.
-  void Function(PcStatus status)? onSnapshot;
+  /// Where telemetry goes. Replaced whenever the link reconnects. The second
+  /// argument is the host's own envelope timestamp, or `null` when the frame
+  /// did not carry one.
+  void Function(PcStatus status, int? hostTimeMs)? onSnapshot;
 
   // -------------------------------------------------------------------------
   // observable state
@@ -415,7 +417,8 @@ class HostConnectionController extends ChangeNotifier {
     _setState(HostConnectionState.connecting, 'Connecting to ${endpoint.hostName}');
 
     final HostLink link = HostLink(
-      onSnapshot: (PcStatus status) => onSnapshot?.call(status),
+      onSnapshot: (PcStatus status, int? hostTimeMs) =>
+          onSnapshot?.call(status, hostTimeMs),
       onSettings: _onSettings,
       onRemoved: () {},
       onClosed: _onClosed,

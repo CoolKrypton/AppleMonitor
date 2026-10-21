@@ -61,7 +61,11 @@ class HostLink {
   });
 
   /// A fresh telemetry snapshot.
-  final void Function(PcStatus status) onSnapshot;
+  ///
+  /// [hostTimeMs] is the envelope's own `timestamp` - the moment the PC built
+  /// the frame, in epoch milliseconds. The provider positions its history by
+  /// it, so a frame the network delayed still lands where it was sampled.
+  final void Function(PcStatus status, int? hostTimeMs) onSnapshot;
 
   /// The host pushed a new display brightness (`device.settings.set`).
   final void Function(double brightnessPercent) onSettings;
@@ -326,7 +330,10 @@ class HostLink {
   void _handleOnline(Envelope envelope) {
     switch (envelope.type) {
       case Proto.snapshot:
-        onSnapshot(PcStatus.fromTelemetry(envelope.payload));
+        onSnapshot(
+          PcStatus.fromTelemetry(envelope.payload),
+          envelope.timestamp,
+        );
       case Proto.settingsSet:
         final double? brightness = envelope.number('brightnessPercent');
         if (brightness == null) return;

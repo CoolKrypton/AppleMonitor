@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:pcm_monitor/models/history_window.dart';
 import 'package:pcm_monitor/models/pc_status.dart';
 import 'package:pcm_monitor/responsive/responsive.dart';
 import 'package:pcm_monitor/screens/dashboard_screen.dart';
@@ -77,9 +78,14 @@ void main() {
     double disk0Read = 80.0,
     bool disk0WriteValid = true,
   }) {
+    // A hand-driven clock: the window is a duration, so a burst of pushes in
+    // the same millisecond would all land on one x and describe no time at
+    // all. One second apart is the host's default cadence.
+    DateTime now = DateTime(2026, 10, 21, 9);
     final MonitorProvider provider = MonitorProvider(
       simulate: false,
       persistSelection: false,
+      clock: () => now,
     );
     for (int i = 0; i < snapshots; i++) {
       provider.pushSnapshot(PcStatus.fromTelemetry(telemetry(
@@ -88,6 +94,7 @@ void main() {
         disk0Read: disk0Read,
         disk0WriteValid: disk0WriteValid,
       )));
+      now = now.add(const Duration(seconds: 1));
     }
     return provider;
   }
@@ -364,30 +371,34 @@ void main() {
       );
     });
 
-    test('age to 60 points, one window per disk and direction', () {
+    test('age to a full minute, one window per disk and direction', () {
       final MonitorProvider provider = liveProvider(snapshots: 100);
       addTearDown(provider.dispose);
 
-      final List<double?> read = provider.diskReadHistoryFor('disk0');
-      expect(read.length, kDashboardHistoryPoints);
+      final HistoryWindow window = provider.diskReadHistoryFor('disk0');
+      final List<double?> read = window.values;
+      // 61 samples a second apart describe exactly one minute, both ends
+      // included - the count follows the span now, not the other way round.
+      expect(read.length, 61);
+      expect(window.spanMs, 60000);
       expect(read.last, 80.0 / 1000000.0);
       expect(read.first, isNotNull, reason: 'the window is full, so no gaps');
-      expect(provider.diskReadHistoryFor('disk1').last, 20.0 / 1000000.0);
-      expect(provider.diskReadHistoryFor('never-seen'), isEmpty);
+      expect(provider.diskReadHistoryFor('disk1').values.last, 20.0 / 1000000.0);
+      expect(provider.diskReadHistoryFor('never-seen').isEmpty, isTrue);
     });
 
     test('are dropped when the source switches, so no series is spliced', () {
       final MonitorProvider provider = liveProvider();
       addTearDown(provider.dispose);
 
-      expect(provider.diskReadHistoryFor('disk0'), isNotEmpty);
+      expect(provider.diskReadHistoryFor('disk0').isNotEmpty, isTrue);
 
       provider.useSimulation(true);
 
-      expect(provider.diskReadHistoryFor('disk0'), isEmpty);
-      expect(provider.diskWriteHistoryFor('disk0'), isEmpty);
+      expect(provider.diskReadHistoryFor('disk0').isEmpty, isTrue);
+      expect(provider.diskWriteHistoryFor('disk0').isEmpty, isTrue);
       // The simulator brings its own devices, with their own windows.
-      expect(provider.diskReadHistoryFor('mock-disk-1'), isNotEmpty);
+      expect(provider.diskReadHistoryFor('mock-disk-1').isNotEmpty, isTrue);
     });
   });
 }

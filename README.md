@@ -40,7 +40,7 @@ lib/
     host_connect_screen.dart     host discovery / pairing / link page
   services/
     protocol.dart                envelope V1 codec + payload validation
-    monitor_provider.dart        sample pump, 60 s adaptive history, GPU select
+    monitor_provider.dart        sample pump, 60 s time-addressed history, GPU select
     tap_sound.dart               tap effect: preference, pre-loaded voices
     display_smoother.dart        20 Hz bar easing (display_smoother.c port)
     smoothing_config.dart        tau / threshold table, 1:1 with the firmware
@@ -66,7 +66,7 @@ lib/
 test/
   logic_test.dart                firmware-parity behaviour tests
   widget_smoke_test.dart         boot + layout + theme smoke tests
-  sound_and_history_window_test.dart  tap effect + 60 s adaptive window
+  sound_and_history_window_test.dart  tap effect + 60 s window invariants
 ```
 
 ## Running it
@@ -176,13 +176,28 @@ These were carried over deliberately; please keep them if you extend the UI.
   `-- GiB`, `--`) — never `0`, and never a value derived from a different sensor.
 - **GPU identity is `protocolId`.** Never index into `gpus[]` to identify an
   adapter. `findGpu('')` intentionally never matches.
-- **60 s history is a duration, not a point count.** The firmware holds 60
-  samples because it samples at 1 Hz; the app measures the host's actual
-  cadence and derives the slot count from it (`kHistoryWindow == 60 s`, so 60
-  points at 1 Hz, 240 at 4 Hz, 30 at 0.5 Hz, clamped to 12…600). A `null` slot
+- **60 s history is a span of time, not a number of slots.** Every sample
+  carries the moment it describes (`HistoryWindow`), and the painter places it
+  at `x = (t − newest + 60 s) / 60 s` — the window is a minute because the
+  samples are filtered to the last minute, never because some counter reached
+  60. A 1 Hz host contributes 61 points spanning exactly 60 s, a 4 Hz host 241,
+  a 0.5 Hz host 31; all three draw the same minute at different densities, and
+  none of them can be rescaled by the others. Capped at 600 samples per window
+  for memory.
+- **Sample times come from the host's envelope `timestamp`.** It is the moment
+  the PC built the frame, so a packet the network delayed 300 ms — or two
+  frames a coalescing socket delivered in one read — still lands where it was
+  sampled. The provider reconstructs one continuous timeline from those deltas
+  and falls back to arrival time when the stamp is missing, implausible (more
+  than a day off our clock), repeated, or negative; a backwards jump is
+  absorbed rather than rewinding the plot.
+- **The plot is never re-scaled.** This replaced an index-addressed chart whose
+  point count was *estimated* from packet arrivals: ±60 ms of Wi-Fi jitter
+  moved that count 13 times in five minutes, ±120 ms moved it 45 times, and a
+  coalesced burst halved the window. Because `x` was `i · width / (n − 1)`,
+  every one of those changes breathed the whole curve. A `null` sample still
   renders as a gap, matching `LV_CHART_POINT_NONE`. Switching adapters clears
-  the history, and so does a change of stream: the cadence belongs to the link
-  that produced it.
+  the history, and so does a change of stream.
 - **Two update cadences.** Text and graphs follow the host sample rate; the bars
   ease at 20 Hz through `DisplaySmoother`, so they stay smooth between samples.
 - **Temperature alarm at 85 °C** (`isHot`), and only when the reading is valid.

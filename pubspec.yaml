@@ -3,7 +3,7 @@ description: PC Monitor - iOS client for the PCMonitorHost telemetry agent.
 publish_to: "none"
 
 # Version format: <host-protocol-ish year>.<month>.<day> + build number.
-version: 2026.10.21+10
+version: 2026.10.21+11
 
 environment:
   sdk: ">=3.4.0 <4.0.0"

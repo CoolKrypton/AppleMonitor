@@ -18,31 +18,31 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 
 import '../models/device_state.dart';
+import '../models/history_window.dart';
 import '../models/pc_status.dart';
 import 'gpu_selection_service.dart';
 import 'mock_data_source.dart';
 
 /// The span every sparkline covers, whatever cadence the host broadcasts at.
 ///
-/// The firmware holds 60 samples and calls that "60 s", which is only true for
-/// its own 1 Hz feed. A host sending 4 Hz would fill the same 60 slots in 15 s:
-/// the plot would still be labelled 60 s while showing a quarter of it. So the
-/// window is a *duration*, and the number of points behind it is derived from
-/// the host's measured interval.
+/// This is a *duration*, not a slot count, and the difference is the whole
+/// point. The firmware holds 60 samples and calls that "60 s", which is only
+/// true for its own 1 Hz feed. The app used to do the same with a better excuse
+/// - it measured the host's arrival interval and derived a slot count from it -
+/// but the count was still what the plot was drawn against, so every wobble in
+/// that estimate rescaled every curve on screen.
+///
+/// Now the window keeps the samples that fall inside this span, each with the
+/// moment it describes, and the painter places them by time. A 4 Hz host
+/// contributes 241 points and a 0.5 Hz host 31 - both ends of the minute are
+/// inside it - and both cover the same minute; neither can stretch the other.
 const Duration kHistoryWindow = Duration(seconds: 60);
 
-/// Points the window holds at the host's default 1 Hz
-/// (`UI_DASHBOARD_HISTORY_POINTS`), and the value every window starts at.
-const int kDashboardHistoryPoints = 60;
-
-/// Bounds on the derived point count.
+/// Hard ceiling on samples kept per window: 600, i.e. a full minute at 10 Hz.
 ///
-/// The floor covers a host that sends one sample every five seconds (12
-/// points); the ceiling a 10 Hz flood (600). Past either end the plot stops
-/// being a plot - a dozen points cannot describe a minute, and six hundred
-/// land below one pixel each on a phone.
-const int kMinHistoryPoints = 12;
-const int kMaxHistoryPoints = 600;
+/// This is a memory bound, not a geometry one - a feed faster than 10 Hz keeps
+/// a slightly shorter window rather than an unbounded list.
+const int kMaxHistorySamples = 600;
 
 /// Telemetry older than this marks the link stale (`telemetry_stale()`).
 const Duration kStaleAfter = Duration(seconds: 5);
@@ -95,41 +95,41 @@ class MonitorProvider extends ChangeNotifier {
 
   /// The 60 s rolling window feeding the dashboard sparklines. `null` entries
   /// are invalid points and are rendered as gaps, matching `LV_CHART_POINT_NONE`.
-  final List<double?> _cpuHistory = <double?>[];
-  final List<double?> _gpuHistory = <double?>[];
-
-  /// How many points each window holds right now.
   ///
-  /// Derived from [_sampleIntervalMs] rather than fixed: the window is always
-  /// [kHistoryWindow] long, so a 4 Hz host needs 240 slots and a 0.5 Hz host
-  /// needs 30. Every series follows this one number.
-  int _historyPoints = kDashboardHistoryPoints;
+  /// Every sample carries the moment it describes, so the plot is addressed by
+  /// time; see [HistoryWindow] for why that matters. All of these windows age
+  /// by the same rule: keep what is inside [kHistoryWindow], drop the rest.
+  final _HistoryBuffer _cpuHistory = _HistoryBuffer();
+  final _HistoryBuffer _gpuHistory = _HistoryBuffer();
 
-  /// Spacing between two snapshots, in milliseconds: the trimmed mean of the
-  /// recent arrivals, so a single stalled sample cannot rescale every plot.
-  double _sampleIntervalMs =
-      kHistoryWindow.inMilliseconds / kDashboardHistoryPoints;
+  /// Where the newest sample sits on this app's continuous timeline, in epoch
+  /// milliseconds. Reconstructed rather than read off a clock, so a jump in
+  /// either machine's clock cannot move the plot; see [_stamp].
+  int _timelineMs = 0;
+  int _lastHostMs = 0;
+  int _lastLocalMs = 0;
 
-  /// The last few arrival intervals, newest last. Bounded by [_intervalWindow].
-  final List<double> _recentIntervals = <double>[];
-  DateTime? _lastSampleAt;
-
-  /// A median over this many arrivals outlives a single outlier (a GC pause,
-  /// a dropped packet) while still reacting within a second or two.
-  static const int _intervalWindow = 9;
+  /// Whether the host's envelope timestamps may be used as sample times.
+  ///
+  /// `null` until the first timestamp arrives. A host clock that disagrees with
+  /// the phone by more than a day is not a wall clock either side can line up
+  /// with, and its deltas are not worth trusting either - the app then falls
+  /// back to arrival time, which is the behaviour it had before.
+  bool? _hostClockTrusted;
 
   /// Per-adapter 60 s windows keyed by `protocol_id`, feeding the curves on the
   /// GPU device list. Unlike [_gpuHistory] these are never cleared by an
   /// adapter switch - every card owns its own continuous series.
-  final Map<String, List<double?>> _gpuHistories = <String, List<double?>>{};
+  final Map<String, _HistoryBuffer> _gpuHistories = <String, _HistoryBuffer>{};
 
   /// Per-disk 60 s windows, keyed by [diskHistoryKey], feeding the read and
   /// write curves on the disk detail cards. Read and write are kept apart
   /// rather than summed: the card plots them as two lines, and a disk whose
   /// write stalls while it keeps reading must not draw as one flat total.
-  final Map<String, List<double?>> _diskReadHistories = <String, List<double?>>{};
-  final Map<String, List<double?>> _diskWriteHistories =
-      <String, List<double?>>{};
+  final Map<String, _HistoryBuffer> _diskReadHistories =
+      <String, _HistoryBuffer>{};
+  final Map<String, _HistoryBuffer> _diskWriteHistories =
+      <String, _HistoryBuffer>{};
 
   /// protocol id currently feeding the GPU sparkline. A change clears history.
   String _historyGpuId = '';
@@ -171,33 +171,28 @@ class MonitorProvider extends ChangeNotifier {
     return _now().difference(at) > kStaleAfter;
   }
 
-  List<double?> get cpuHistory => List<double?>.unmodifiable(_cpuHistory);
-  List<double?> get gpuHistory => List<double?>.unmodifiable(_gpuHistory);
+  HistoryWindow get cpuHistory => _cpuHistory.snapshot();
+  HistoryWindow get gpuHistory => _gpuHistory.snapshot();
 
-  /// Slots in each window at the host's current cadence. 60 at 1 Hz; the
-  /// sparklines are always [kHistoryWindow] long regardless.
-  int get historyPoints => _historyPoints;
-
-  /// The host's measured sample interval, in milliseconds. Reported in the
-  /// simulated status line's spirit - it is the number that decides how many
-  /// points a 60 s window needs.
-  double get sampleIntervalMs => _sampleIntervalMs;
+  /// How many samples the CPU window holds at the host's current cadence.
+  ///
+  /// 61 at 1 Hz, 241 at 4 Hz, 31 at 0.5 Hz - the point *density* follows the
+  /// host. Unlike before, this number is derived from the window rather than
+  /// driving it: the span is always [kHistoryWindow] whatever it says.
+  int get historyPoints => _cpuHistory.length;
 
   /// The 60 s window belonging to one adapter (empty when it has never been
   /// sampled). Used by the GPU device list.
-  List<double?> gpuHistoryFor(String protocolId) => List<double?>.unmodifiable(
-        _gpuHistories[protocolId] ?? const <double?>[],
-      );
+  HistoryWindow gpuHistoryFor(String protocolId) =>
+      _gpuHistories[protocolId]?.snapshot() ?? HistoryWindow.empty;
 
   /// The 60 s read / write windows belonging to one disk (empty when it has
   /// never been sampled). Used by the disk detail cards.
-  List<double?> diskReadHistoryFor(String key) => List<double?>.unmodifiable(
-        _diskReadHistories[key] ?? const <double?>[],
-      );
+  HistoryWindow diskReadHistoryFor(String key) =>
+      _diskReadHistories[key]?.snapshot() ?? HistoryWindow.empty;
 
-  List<double?> diskWriteHistoryFor(String key) => List<double?>.unmodifiable(
-        _diskWriteHistories[key] ?? const <double?>[],
-      );
+  HistoryWindow diskWriteHistoryFor(String key) =>
+      _diskWriteHistories[key]?.snapshot() ?? HistoryWindow.empty;
 
   /// The key a disk's windows are filed under.
   ///
@@ -283,14 +278,63 @@ class MonitorProvider extends ChangeNotifier {
   /// Called by the host link at whatever cadence the PC broadcasts - 1 Hz by
   /// default. Widgets animate toward the new values on their own tickers, so
   /// no intermediate stepping happens here.
-  void pushSnapshot(PcStatus status) {
+  ///
+  /// [hostTimeMs] is the `timestamp` the host stamped on the envelope, and it
+  /// is what the history windows are positioned by. Arrival time cannot do that
+  /// job: a packet delayed 300 ms by the network, or two frames the socket
+  /// delivered in one read, say nothing about when the PC sampled them. The
+  /// host's own clock does, and a late frame still carries the moment it was
+  /// built even if the send itself blocked.
+  void pushSnapshot(PcStatus status, {int? hostTimeMs}) {
     if (isSimulated) return;
     final DateTime now = _now();
+    final int stamp = _stamp(now, hostTimeMs);
     _receivedAt = now;
     _lastStatus = status;
     _cacheTargetValues(status);
-    _pushHistory(status, now);
+    _pushHistory(status, stamp);
     notifyListeners();
+  }
+
+  /// Places one sample on the app's continuous timeline and returns its time.
+  ///
+  /// The timeline is *reconstructed* from deltas rather than read off a clock:
+  /// each sample is the previous one plus the gap the host reports between them.
+  /// That keeps the plot immune to both machines' wall clocks and to the phone
+  /// sleeping, and it degrades to arrival time whenever the host's own stamp is
+  /// missing or implausible - a negative gap, or one longer than the whole
+  /// window, which is a reconnect rather than a cadence.
+  int _stamp(DateTime local, int? hostTimeMs) {
+    final int localMs = local.millisecondsSinceEpoch;
+    final int? host = (hostTimeMs != null && hostTimeMs > 0) ? hostTimeMs : null;
+
+    if (_hostClockTrusted == null && host != null) {
+      _hostClockTrusted =
+          (host - localMs).abs() <= const Duration(days: 1).inMilliseconds;
+    }
+    final bool useHost = _hostClockTrusted == true && host != null;
+
+    if (_timelineMs == 0) {
+      // First sample after a (re)connect: it only needs to be somewhere sane,
+      // because every later position is a delta from it.
+      _timelineMs = useHost ? host : localMs;
+    } else {
+      int delta = -1;
+      if (useHost && _lastHostMs > 0) {
+        delta = host - _lastHostMs;
+      }
+      if (delta <= 0) {
+        // No host stamp, a repeated one, or a clock that went backwards: fall
+        // back to the local gap so the sample still lands ahead of the last.
+        delta = localMs - _lastLocalMs;
+      }
+      if (delta < 0) delta = 0;
+      _timelineMs += delta;
+    }
+
+    _lastHostMs = useHost ? host : 0;
+    _lastLocalMs = localMs;
+    return _timelineMs;
   }
 
   /// Publishes the host link's status line, so the status bar has a single
@@ -312,13 +356,14 @@ class MonitorProvider extends ChangeNotifier {
     _diskReadHistories.clear();
     _diskWriteHistories.clear();
     _historyGpuId = '';
-    // The cadence belongs to the link that just went away: the next host may
-    // broadcast at a completely different rate, and a stale measurement would
-    // size its windows for the wrong stream.
-    _lastSampleAt = null;
-    _recentIntervals.clear();
-    _historyPoints = kDashboardHistoryPoints;
-    _sampleIntervalMs = kHistoryWindow.inMilliseconds / kDashboardHistoryPoints;
+    // The timeline belongs to the link that just went away. The next host may
+    // broadcast at a different rate, be a different machine with a different
+    // clock, or simply be reached through a fresh socket - all three make the
+    // old positions meaningless.
+    _timelineMs = 0;
+    _lastHostMs = 0;
+    _lastLocalMs = 0;
+    _hostClockTrusted = null;
     _cpuUsageTarget = 0;
     _cpuUsageTargetValid = false;
     _gpuUsageTarget = 0;
@@ -385,7 +430,7 @@ class MonitorProvider extends ChangeNotifier {
     _lastStatus = first;
     _receivedAt = now;
     _mockLastSample = now;
-    _pushHistory(first, now);
+    _pushHistory(first, _stamp(now, null));
     _cacheTargetValues(first);
   }
 
@@ -401,7 +446,7 @@ class MonitorProvider extends ChangeNotifier {
         _lastStatus = next;
         _receivedAt = now;
         _cacheTargetValues(next);
-        _pushHistory(next, now);
+        _pushHistory(next, _stamp(now, null));
       }
     }
     notifyListeners();
@@ -422,9 +467,7 @@ class MonitorProvider extends ChangeNotifier {
     }
   }
 
-  void _pushHistory(PcStatus status, DateTime at) {
-    _noteCadence(at);
-
+  void _pushHistory(PcStatus status, int timeMs) {
     final GpuStatus? gpu = _gpuSelection.selected(status);
     final GpuEngine? engine = PcStatus.busiestEngine(gpu);
     final String gpuId = gpu?.protocolId ?? '';
@@ -434,152 +477,60 @@ class MonitorProvider extends ChangeNotifier {
       _historyGpuId = gpuId;
       _cpuHistory.clear();
       _gpuHistory.clear();
-      _cpuHistory.addAll(List<double?>.filled(_historyPoints, null));
-      _gpuHistory.addAll(List<double?>.filled(_historyPoints, null));
     }
 
-    _cpuHistory.add(status.cpuUsageValid ? status.cpuUsage.toDouble() : null);
-    _gpuHistory.add(
+    _append(
+      _cpuHistory,
+      timeMs,
+      status.cpuUsageValid ? status.cpuUsage.toDouble() : null,
+    );
+    _append(
+      _gpuHistory,
+      timeMs,
       engine != null && engine.usageValid ? engine.usage.toDouble() : null,
     );
-
-    while (_cpuHistory.length > _historyPoints) {
-      _cpuHistory.removeAt(0);
-    }
-    while (_gpuHistory.length > _historyPoints) {
-      _gpuHistory.removeAt(0);
-    }
 
     // Every adapter gets a window of its own so the device list can draw a
     // curve per card. These are deliberately independent of the switch above.
     for (final GpuStatus adapter in status.gpus) {
-      _advance(_gpuHistories, adapter.protocolId, plotValueFor(adapter));
+      _appendIn(_gpuHistories, adapter.protocolId, timeMs,
+          plotValueFor(adapter));
     }
 
     // Same idea for the physical disks, one window per direction - the disk
     // detail card plots read and write as two curves on one 60 s plot.
     for (final DiskStatus disk in status.disks) {
       final String key = diskHistoryKey(disk);
-      _advance(_diskReadHistories, key, disk.readValid ? disk.readMbS : null);
-      _advance(_diskWriteHistories, key, disk.writeValid ? disk.writeMbS : null);
+      _appendIn(_diskReadHistories, key, timeMs,
+          disk.readValid ? disk.readMbS : null);
+      _appendIn(_diskWriteHistories, key, timeMs,
+          disk.writeValid ? disk.writeMbS : null);
     }
   }
 
-  /// Measures the host's cadence and re-fits every window to match.
+  /// Appends one sample and retires everything that has aged out.
   ///
-  /// The estimate is the trimmed mean of the last [_intervalWindow] arrivals:
-  /// drop the fastest and the slowest, average the rest. The trim is what makes
-  /// one late packet (a GC pause, a dropped datagram) harmless, and the mean is
-  /// what makes a jittering feed stable - a median would snap to whichever side
-  /// the jitter happened to fall on, and the point count would flip with it.
-  /// Arrivals longer than the whole window are treated as a gap (a reconnect, a
-  /// laptop waking from sleep) rather than as a cadence, and are skipped - as
-  /// are arrivals closer together than [_minSampleIntervalMs], which can only
-  /// come from two pushes in the same frame rather than from the host's timer.
-  void _noteCadence(DateTime at) {
-    final DateTime? previous = _lastSampleAt;
-    _lastSampleAt = at;
-    if (previous == null) return;
-
-    final double ms = at.difference(previous).inMilliseconds.toDouble();
-    if (ms < _minSampleIntervalMs || ms > kHistoryWindow.inMilliseconds) {
-      return;
-    }
-
-    _recentIntervals.add(ms);
-    if (_recentIntervals.length > _intervalWindow) {
-      _recentIntervals.removeAt(0);
-    }
-
-    _sampleIntervalMs = _trimmedMean(List<double>.of(_recentIntervals)..sort());
-
-    final int points = (kHistoryWindow.inMilliseconds / _sampleIntervalMs)
-        .round()
-        .clamp(kMinHistoryPoints, kMaxHistoryPoints);
-    // One point either way is jitter around a rounding boundary, not a change
-    // of rate: re-fitting for it would blink a gap in and out of the left edge
-    // of every plot, because growing a window pads it with one missing sample.
-    // A real rate change moves the count by tens of points.
-    if ((points - _historyPoints).abs() < 2) return;
-    _historyPoints = points;
-    _resizeWindows();
+  /// This is the only place a window grows, which is what keeps every plot on
+  /// the same minute: the rule is "keep what is inside [kHistoryWindow]", not
+  /// "keep N of them".
+  static void _append(_HistoryBuffer window, int timeMs, double? value) {
+    window.add(timeMs, value);
+    window.trim(timeMs, kHistoryWindow.inMilliseconds);
   }
 
-  /// The fastest cadence worth tracking: 25 Hz. Two pushes inside one frame
-  /// say nothing about the host's timer.
-  static const double _minSampleIntervalMs = 40;
-
-  /// Mean of [sorted] with its extremes dropped (all of them when there are
-  /// only one or two samples to work with).
-  static double _trimmedMean(List<double> sorted) {
-    if (sorted.isEmpty) return 0;
-    if (sorted.length <= 2) {
-      double sum = 0;
-      for (final double value in sorted) {
-        sum += value;
-      }
-      return sum / sorted.length;
-    }
-    double sum = 0;
-    for (int i = 1; i < sorted.length - 1; i++) {
-      sum += sorted[i];
-    }
-    return sum / (sorted.length - 2);
-  }
-
-  /// Re-fits every live window to [_historyPoints].
-  ///
-  /// Growing pads the *old* end with gaps rather than inventing samples: those
-  /// slice-of-a-second slots were never measured, and a zero there would draw
-  /// a minute of idle. Shrinking drops the oldest points, which is what a
-  /// faster feed means - the same 60 s now needs more of them, and the newest
-  /// are the ones worth keeping.
-  void _resizeWindows() {
-    for (final List<double?> series in <List<double?>>[
-      _cpuHistory,
-      _gpuHistory,
-      ..._gpuHistories.values,
-      ..._diskReadHistories.values,
-      ..._diskWriteHistories.values,
-    ]) {
-      if (series.length > _historyPoints) {
-        series.removeRange(0, series.length - _historyPoints);
-      } else if (series.length < _historyPoints) {
-        series.insertAll(
-          0,
-          List<double?>.filled(_historyPoints - series.length, null),
-        );
-      }
-    }
-  }
-
-  /// Appends one sample to a rolling window, retiring the oldest point.
-  ///
-  /// One helper for every series: the GPU windows and the disk windows have to
-  /// age identically, and they used to be written out by hand.
+  /// [append] for the per-device windows, which are created on first sight.
   ///
   /// An empty [key] means the host sent no id for that device; there is nothing
   /// to file the sample under, so it is dropped rather than pooling every
   /// unidentified device into one window.
-  void _advance(
-    Map<String, List<double?>> store,
+  static void _appendIn(
+    Map<String, _HistoryBuffer> store,
     String key,
+    int timeMs,
     double? value,
   ) {
     if (key.isEmpty) return;
-    // growable: true is load-bearing. List.filled defaults to a fixed length,
-    // so the series.add(...) below threw UnsupportedError on the first series
-    // that used it - leaving that one stuck with an all-null window (grid but
-    // no curve on its card) and aborting the loop before the remaining series
-    // ever got a window at all (completely blank cards).
-    final List<double?> series = store.putIfAbsent(
-      key,
-      () => List<double?>.filled(_historyPoints, null, growable: true),
-    );
-    series.add(value);
-    while (series.length > _historyPoints) {
-      series.removeAt(0);
-    }
+    _append(store.putIfAbsent(key, _HistoryBuffer.new), timeMs, value);
   }
 
   /// The value the device list plots for one adapter: its **adapter-level
@@ -599,13 +550,51 @@ class MonitorProvider extends ChangeNotifier {
     _deviceState = state;
     notifyListeners();
   }
+}
 
-  /// Replaces the history with a flat line, used when the widget tree is first
-  /// laid out so the sparkline starts from a defined baseline.
-  void primeHistory(PcStatus status) {
-    if (_cpuHistory.length >= _historyPoints) return;
-    _pushHistory(status, _now());
+/// The mutable half of a [HistoryWindow]: two parallel lists that only ever
+/// grow and trim together.
+///
+/// Kept private so no caller can add a value without its timestamp - the
+/// alignment that makes the plot time-addressed is enforced here, not by
+/// convention at every call site.
+class _HistoryBuffer {
+  final List<int> times = <int>[];
+  final List<double?> values = <double?>[];
+
+  int get length => values.length;
+
+  void add(int timeMs, double? value) {
+    times.add(timeMs);
+    values.add(value);
   }
+
+  /// Drops every sample older than [spanMs] before [newestMs], and any excess
+  /// past [kMaxHistorySamples].
+  ///
+  /// Times are non-decreasing, so the expired ones are always a prefix: one
+  /// scan, one range removal, no per-sample shifting.
+  void trim(int newestMs, int spanMs) {
+    int drop = 0;
+    while (drop < times.length && newestMs - times[drop] > spanMs) {
+      drop++;
+    }
+    final int excess = times.length - kMaxHistorySamples;
+    if (excess > drop) drop = excess;
+    if (drop == 0) return;
+    times.removeRange(0, drop);
+    values.removeRange(0, drop);
+  }
+
+  void clear() {
+    times.clear();
+    values.clear();
+  }
+
+  HistoryWindow snapshot() => HistoryWindow(
+        values: List<double?>.unmodifiable(values),
+        timesMs: List<int>.unmodifiable(times),
+      );
 }
 
 /// Lightweight average used by the sparkline when a series is mostly gaps.

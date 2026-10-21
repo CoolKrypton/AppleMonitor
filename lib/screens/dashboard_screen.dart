@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../models/history_window.dart';
 import '../models/pc_status.dart';
 import '../responsive/responsive.dart';
 import '../services/monitor_provider.dart';
@@ -137,7 +138,10 @@ class ProcessorCard extends StatelessWidget {
   /// Smoothed value driving the bar (the number itself uses [usage]).
   final double displayUsage;
 
-  final List<double?> history;
+  /// The card's curve: values paired with the moments they were sampled.
+  /// Passed whole rather than as two lists so the painter cannot be handed a
+  /// value list and someone else's timestamps.
+  final HistoryWindow history;
   final VoidCallback onTap;
 
   /// Stacked variant for narrow screens: the chart drops below the detail row.
@@ -323,7 +327,8 @@ class ProcessorCard extends StatelessWidget {
                 minHeight: compact ? 0 : metrics.px(28),
               ),
               child: Sparkline(
-                points: history,
+                points: history.values,
+                times: history.timesMs,
                 color: accent,
                 thresholdColor: theme.hot,
               ),
@@ -631,8 +636,8 @@ class DashboardData {
   final String diskRead;
   final String diskWrite;
 
-  final List<double?> cpuHistory;
-  final List<double?> gpuHistory;
+  final HistoryWindow cpuHistory;
+  final HistoryWindow gpuHistory;
 
   static DashboardData derive(MonitorProvider provider, LayoutMetrics metrics) {
     final PcStatus target = provider.target;

@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../models/history_window.dart';
 import '../models/pc_status.dart';
 import '../responsive/responsive.dart';
 import '../services/monitor_provider.dart';
@@ -245,9 +246,10 @@ class _DiskCard extends StatelessWidget {
   final DiskStatus disk;
   final DiskStatus? displayDisk;
 
-  /// This disk's own 60 s windows, drawn as the card's dynamic plot.
-  final List<double?> readHistory;
-  final List<double?> writeHistory;
+  /// This disk's own 60 s windows, drawn as the card's dynamic plot. Whole
+  /// windows, times included: the plot is placed by time, not by index.
+  final HistoryWindow readHistory;
+  final HistoryWindow writeHistory;
 
   /// Portrait cards only: whether the card is tall enough to carry the plot.
   final bool showChart;
@@ -321,8 +323,8 @@ class _DiskCard extends StatelessWidget {
               child: Padding(
                 padding: EdgeInsets.only(top: metrics.px(8)),
                 child: DiskIoChart(
-                  readPoints: readHistory,
-                  writePoints: writeHistory,
+                  readWindow: readHistory,
+                  writeWindow: writeHistory,
                   readColor: theme.cpu,
                   writeColor: theme.gpu,
                 ),
@@ -395,14 +397,14 @@ class _DiskCard extends StatelessWidget {
 class DiskIoChart extends StatelessWidget {
   const DiskIoChart({
     super.key,
-    required this.readPoints,
-    required this.writePoints,
+    required this.readWindow,
+    required this.writeWindow,
     required this.readColor,
     required this.writeColor,
   });
 
-  final List<double?> readPoints;
-  final List<double?> writePoints;
+  final HistoryWindow readWindow;
+  final HistoryWindow writeWindow;
   final Color readColor;
   final Color writeColor;
 
@@ -433,11 +435,15 @@ class DiskIoChart extends StatelessWidget {
         SizedBox(height: metrics.px(4)),
         Expanded(
           child: Sparkline(
-            points: readPoints,
+            points: readWindow.values,
+            times: readWindow.timesMs,
             color: readColor,
-            secondaryPoints: writePoints,
+            secondaryPoints: writeWindow.values,
+            secondaryTimes: writeWindow.timesMs,
             secondaryColor: writeColor,
-            maxY: sparklineCeiling(<List<double?>>[readPoints, writePoints]),
+            maxY: sparklineCeiling(
+              <List<double?>>[readWindow.values, writeWindow.values],
+            ),
             strokeWidth: 1.3,
           ),
         ),

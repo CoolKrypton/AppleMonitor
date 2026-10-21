@@ -4,17 +4,29 @@ import 'package:flutter/material.dart';
 
 import '../theme/monitor_theme.dart';
 
-/// A 60-point sparkline with gap support, a filled area and an optional glow.
+/// A time-addressed sparkline with gap support, a filled area and a glow.
 ///
 /// The firmware's chart uses `LV_CHART_POINT_NONE` for invalid points; `null`
 /// entries here reproduce that exactly - the line breaks rather than
 /// interpolating across a gap.
+///
+/// When [times] is supplied the horizontal position of a point is its timestamp,
+/// not its index: the plot always shows [windowMs] of history ending at the
+/// newest sample. That is what keeps the window still. An index-addressed plot
+/// spreads `n` points evenly across the width, so any change in `n` - and `n` is
+/// at the mercy of packet timing - rescales the whole curve against the same
+/// frame. With times, a late packet widens a gap on the right and nothing else
+/// moves. Without [times] the old index behaviour is kept, for previews and
+/// callers that hold no timestamps.
 class Sparkline extends StatelessWidget {
   const Sparkline({
     super.key,
     required this.points,
     required this.color,
+    this.times,
+    this.windowMs = 60000,
     this.secondaryPoints,
+    this.secondaryTimes,
     this.secondaryColor,
     this.thresholdColor,
     this.threshold = 85,
@@ -27,6 +39,13 @@ class Sparkline extends StatelessWidget {
   /// Oldest first. `null` marks an invalid / missing sample.
   final List<double?> points;
 
+  /// When each point was sampled, same length as [points]. `null` falls back to
+  /// spreading the points evenly across the width.
+  final List<int>? times;
+
+  /// Width of the visible history, in milliseconds.
+  final int windowMs;
+
   final Color color;
 
   /// An optional second series on the same plot, for the one case where two
@@ -34,6 +53,10 @@ class Sparkline extends StatelessWidget {
   /// throughput. It is drawn as a plain stroke in [secondaryColor] over the
   /// first series' filled area, so the two stay tellable apart.
   final List<double?>? secondaryPoints;
+
+  /// Timestamps for [secondaryPoints]; falls back to [times] when omitted, which
+  /// is correct for the read/write pair - both are appended on the same push.
+  final List<int>? secondaryTimes;
   final Color? secondaryColor;
 
   /// Colour used when a point crosses [threshold].
@@ -51,8 +74,11 @@ class Sparkline extends StatelessWidget {
     return CustomPaint(
       painter: _SparklinePainter(
         points: points,
+        times: times,
+        windowMs: windowMs,
         color: color,
         secondaryPoints: secondaryPoints,
+        secondaryTimes: secondaryTimes,
         secondaryColor: secondaryColor,
         thresholdColor: thresholdColor ?? theme.hot,
         threshold: threshold,
@@ -94,8 +120,11 @@ double sparklineCeiling(
 class _SparklinePainter extends CustomPainter {
   _SparklinePainter({
     required this.points,
+    required this.times,
+    required this.windowMs,
     required this.color,
     required this.secondaryPoints,
+    required this.secondaryTimes,
     required this.secondaryColor,
     required this.thresholdColor,
     required this.threshold,
@@ -107,8 +136,11 @@ class _SparklinePainter extends CustomPainter {
   });
 
   final List<double?> points;
+  final List<int>? times;
+  final int windowMs;
   final Color color;
   final List<double?>? secondaryPoints;
+  final List<int>? secondaryTimes;
   final Color? secondaryColor;
   final Color thresholdColor;
   final double threshold;
@@ -145,6 +177,14 @@ class _SparklinePainter extends CustomPainter {
     List<double?>? second = secondaryPoints;
     if (second != null && second.length < 2) second = null;
 
+    // The right edge of the plot is the newest sample, so the visible span is
+    // always the same [windowMs] however many points happen to be in it. One
+    // domain for both series, or a disk's read and write lines would disagree
+    // about where "now" is.
+    final int? domainEnd = (times != null && times!.isNotEmpty)
+        ? times!.last
+        : null;
+
     // One series keeps the gradient stroke it always had. Two series on one
     // plot do not: each line would fade toward the very same hot colour across
     // the same span, and neither would read as itself. Paired series are
@@ -154,18 +194,22 @@ class _SparklinePainter extends CustomPainter {
       canvas,
       size,
       points,
+      times,
       color,
       fill: true,
       gradientStroke: second == null,
+      domainEnd: domainEnd,
     );
     if (second != null) {
       _paintSeries(
         canvas,
         size,
         second,
+        secondaryTimes ?? times,
         secondaryColor ?? color,
         fill: false,
         gradientStroke: false,
+        domainEnd: domainEnd,
       );
     }
   }
@@ -175,14 +219,33 @@ class _SparklinePainter extends CustomPainter {
     Canvas canvas,
     Size size,
     List<double?> series,
+    List<int>? seriesTimes,
     Color seriesColor, {
     required bool fill,
     required bool gradientStroke,
+    required int? domainEnd,
   }) {
     final double range = (maxY - minY) == 0 ? 1 : (maxY - minY);
-    final double stepX = size.width / (series.length - 1);
+    final double stepX =
+        series.length > 1 ? size.width / (series.length - 1) : size.width;
 
-    double xFor(int index) => index * stepX;
+    // A caller that hands in a mismatched timestamp list falls back to index
+    // spacing rather than throwing a RangeError mid-paint.
+    final bool byTime = seriesTimes != null &&
+        domainEnd != null &&
+        seriesTimes.length == series.length;
+    final int domainStart = (domainEnd ?? 0) - windowMs;
+
+    double xFor(int index) {
+      if (!byTime) return index * stepX;
+      final double fraction =
+          (seriesTimes![index] - domainStart) / windowMs;
+      // Samples older than the window can only arrive with a clock jump; they
+      // belong at the left edge, not off-canvas.
+      final double clamped = fraction <= 0 ? 0 : (fraction >= 1 ? 1 : fraction);
+      return clamped * size.width;
+    }
+
     double yFor(double value) =>
         size.height - ((value.clamp(minY, maxY) - minY) / range) * size.height;
 
@@ -285,8 +348,22 @@ class _SparklinePainter extends CustomPainter {
     if (oldDelegate.strokeWidth != strokeWidth) return true;
     if (oldDelegate.showGrid != showGrid) return true;
     if (oldDelegate.minY != minY || oldDelegate.maxY != maxY) return true;
+    if (oldDelegate.windowMs != windowMs) return true;
+    if (!_sameTimes(oldDelegate.times, times)) return true;
+    if (!_sameTimes(oldDelegate.secondaryTimes, secondaryTimes)) return true;
     if (!_sameSeries(oldDelegate.points, points)) return true;
     return !_sameSeries(oldDelegate.secondaryPoints, secondaryPoints);
+  }
+
+  /// Timestamps move even when the values do not - a steady 100 % line still
+  /// slides left as the window advances, and a mark at the wrong x is a bug.
+  static bool _sameTimes(List<int>? a, List<int>? b) {
+    if (a == null || b == null) return a == b;
+    if (a.length != b.length) return false;
+    for (int i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
   }
 
   /// Content comparison, because the provider hands out a fresh unmodifiable

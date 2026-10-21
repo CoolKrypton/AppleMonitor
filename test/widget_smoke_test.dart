@@ -132,16 +132,16 @@ void main() {
       expect(provider.connectionLabel, isNotEmpty);
     });
 
-    test('history never exceeds the firmware window', () {
+    test('history never exceeds the per-window sample cap', () {
       final MonitorProvider provider = MonitorProvider(simulate: true);
       addTearDown(provider.dispose);
       expect(
         provider.cpuHistory.length,
-        lessThanOrEqualTo(kDashboardHistoryPoints),
+        lessThanOrEqualTo(kMaxHistorySamples),
       );
       expect(
         provider.gpuHistory.length,
-        lessThanOrEqualTo(kDashboardHistoryPoints),
+        lessThanOrEqualTo(kMaxHistorySamples),
       );
     });
 

@@ -79,131 +79,186 @@ void main() {
   }
 
   // -------------------------------------------------------------------------
-  // The window is a duration, not a point count
+  // The window is a minute of time, not a count of samples
   // -------------------------------------------------------------------------
 
-  group('the 60 s window follows the host cadence', () {
-    test('1 Hz keeps 60 points - the firmware window', () {
+  group('the window is always one minute, whatever the cadence', () {
+    test('1 Hz keeps 61 samples spanning exactly 60 s', () {
       DateTime now = start;
       final MonitorProvider provider = liveProvider(() => now);
       addTearDown(provider.dispose);
 
-      feed(provider, (Duration d) => now = now.add(d), 10, const Duration(seconds: 1));
+      feed(provider, (Duration d) => now = now.add(d), 90,
+          const Duration(seconds: 1));
 
-      expect(provider.sampleIntervalMs, 1000);
-      expect(provider.historyPoints, kDashboardHistoryPoints);
-      expect(provider.cpuHistory.length, 60);
+      // 61 points, not 60: both ends of the minute are inside it, and 61
+      // samples a second apart describe exactly 60 s. The number is a
+      // consequence of the span now, not the other way round.
+      expect(provider.historyPoints, 61);
+      expect(provider.cpuHistory.spanMs, 60000);
+      expect(provider.cpuHistory.values.last, 50);
+      expect(provider.cpuHistory.timesMs.length, 61);
     });
 
-    test('4 Hz keeps 240 points: the same 60 s, four times the resolution', () {
+    test('4 Hz keeps the same minute at four times the density', () {
       DateTime now = start;
       final MonitorProvider provider = liveProvider(() => now);
       addTearDown(provider.dispose);
 
-      feed(
-        provider,
-        (Duration d) => now = now.add(d),
-        120,
-        const Duration(milliseconds: 250),
-      );
+      feed(provider, (Duration d) => now = now.add(d), 400,
+          const Duration(milliseconds: 250));
 
-      expect(provider.sampleIntervalMs, 250);
-      expect(provider.historyPoints, 240);
-      expect(provider.cpuHistory.length, 240);
-      // 120 samples cannot fill 240 slots; the missing half is padding.
-      expect(
-        provider.cpuHistory.where((double? v) => v == null).length,
-        greaterThan(0),
-        reason: 'growth must pad with gaps, not with invented samples',
-      );
-      expect(provider.cpuHistory.last, 50);
-      // Every other window follows the same number.
-      expect(provider.gpuHistory.length, 240);
-      expect(provider.diskReadHistoryFor('disk0').length, 240);
-      expect(provider.diskWriteHistoryFor('disk0').length, 240);
+      expect(provider.historyPoints, 241);
+      expect(provider.cpuHistory.spanMs, 60000);
+      // Every window ages by the same rule, not by a shared slot count.
+      expect(provider.gpuHistory.spanMs, 60000);
+      expect(provider.diskReadHistoryFor('disk0').spanMs, 60000);
+      expect(provider.diskWriteHistoryFor('disk0').spanMs, 60000);
     });
 
-    test('a slower host shrinks the window instead of stretching it', () {
+    test('a slower host keeps 60 s too - it does not shrink the window', () {
       DateTime now = start;
       final MonitorProvider provider = liveProvider(() => now);
       addTearDown(provider.dispose);
 
-      feed(
-        provider,
-        (Duration d) => now = now.add(d),
-        40,
-        const Duration(milliseconds: 500),
-      );
-      expect(provider.historyPoints, 120);
+      feed(provider, (Duration d) => now = now.add(d), 200,
+          const Duration(milliseconds: 500));
 
-      feed(provider, (Duration d) => now = now.add(d), 20, const Duration(seconds: 2));
-      expect(provider.sampleIntervalMs, 2000);
-      expect(provider.historyPoints, 30);
-      expect(provider.cpuHistory.length, 30);
+      expect(provider.historyPoints, 31);
+      expect(provider.cpuHistory.spanMs, 60000);
     });
 
-    test('a host slower than the floor still gets a full minute', () {
+    test('jitter in arrival times cannot change the span', () {
       DateTime now = start;
       final MonitorProvider provider = liveProvider(() => now);
       addTearDown(provider.dispose);
 
-      feed(provider, (Duration d) => now = now.add(d), 12, const Duration(seconds: 10));
-
-      // 60000 / 10000 = 6 points, below the floor: twelve slots of five
-      // seconds each is the shortest honest plot.
-      expect(provider.historyPoints, kMinHistoryPoints);
-    });
-
-    test('two pushes inside one frame are not a cadence', () {
-      DateTime now = start;
-      final MonitorProvider provider = liveProvider(() => now);
-      addTearDown(provider.dispose);
-
-      feed(provider, (Duration d) => now = now.add(d), 10, const Duration(seconds: 1));
-      provider.pushSnapshot(PcStatus.fromTelemetry(telemetry()));
-      now = now.add(const Duration(milliseconds: 3));
-      provider.pushSnapshot(PcStatus.fromTelemetry(telemetry()));
-
-      expect(provider.historyPoints, kDashboardHistoryPoints);
-      expect(provider.sampleIntervalMs, 1000);
-    });
-
-    test('jitter around 1 Hz does not re-fit the window', () {
-      DateTime now = start;
-      final MonitorProvider provider = liveProvider(() => now);
-      addTearDown(provider.dispose);
-
-      for (int i = 0; i < 30; i++) {
+      // +/- 120 ms either side of 1 Hz, which used to swing the derived point
+      // count between 56 and 64 and breathe the whole curve with it.
+      for (int i = 0; i < 400; i++) {
         provider.pushSnapshot(PcStatus.fromTelemetry(telemetry()));
-        now = now.add(Duration(milliseconds: i.isEven ? 950 : 1050));
+        now = now.add(Duration(milliseconds: i.isEven ? 880 : 1120));
       }
 
-      // A trimmed mean averages the jitter away; a median would snap to one
-      // side and move the point count with it.
-      expect(provider.historyPoints, 60);
-      expect(provider.cpuHistory.length, 60);
-      expect(provider.sampleIntervalMs, closeTo(1000, 20));
+      expect(provider.cpuHistory.spanMs, lessThanOrEqualTo(60000));
+      expect(provider.cpuHistory.spanMs, greaterThanOrEqualTo(59000));
+      expect(provider.historyPoints, inInclusiveRange(55, 65));
     });
 
-    test('reconnecting resets the measured cadence', () {
+    test('a coalesced burst no longer halves the window', () {
       DateTime now = start;
       final MonitorProvider provider = liveProvider(() => now);
       addTearDown(provider.dispose);
 
-      feed(
-        provider,
-        (Duration d) => now = now.add(d),
-        40,
-        const Duration(milliseconds: 250),
-      );
-      expect(provider.historyPoints, 240);
+      // Two frames per socket read: 1 ms apart, then a 2 s gap. The old
+      // estimator skipped the 1 ms interval and read the host as 0.5 Hz, so a
+      // minute of history was drawn as thirty points - the curve stretched to
+      // twice its width. Two samples per two seconds is still 1 Hz of data.
+      for (int i = 0; i < 240; i++) {
+        provider.pushSnapshot(PcStatus.fromTelemetry(telemetry()));
+        now = now.add(Duration(milliseconds: i.isEven ? 1 : 1999));
+      }
+
+      expect(provider.cpuHistory.spanMs, lessThanOrEqualTo(60000));
+      expect(provider.cpuHistory.spanMs, greaterThanOrEqualTo(59000));
+      expect(provider.historyPoints, greaterThan(55));
+    });
+
+    test('host timestamps place samples where the PC took them', () {
+      DateTime now = start;
+      final MonitorProvider provider = liveProvider(() => now);
+      addTearDown(provider.dispose);
+
+      // The network delivers everything in a burst 2 ms apart; the host says
+      // the samples were a second apart. The host wins, because it is the one
+      // that knows when the counter was read.
+      final int base = start.millisecondsSinceEpoch;
+      for (int i = 0; i < 90; i++) {
+        provider.pushSnapshot(
+          PcStatus.fromTelemetry(telemetry()),
+          hostTimeMs: base + i * 1000,
+        );
+        now = now.add(const Duration(milliseconds: 2));
+      }
+
+      expect(provider.cpuHistory.spanMs, 60000);
+      expect(provider.historyPoints, 61);
+    });
+
+    test('a host clock that disagrees with ours is ignored', () {
+      DateTime now = start;
+      final MonitorProvider provider = liveProvider(() => now);
+      addTearDown(provider.dispose);
+
+      // Seconds rather than milliseconds: a "timestamp" that cannot be lined
+      // up with any wall clock is not a clock we can trust, so the provider
+      // falls back to arrival time instead of drawing a 10-minute window.
+      final int wrong = start.millisecondsSinceEpoch ~/ 1000;
+      for (int i = 0; i < 90; i++) {
+        provider.pushSnapshot(
+          PcStatus.fromTelemetry(telemetry()),
+          hostTimeMs: wrong + i,
+        );
+        now = now.add(const Duration(seconds: 1));
+      }
+
+      expect(provider.historyPoints, 61);
+      expect(provider.cpuHistory.spanMs, 60000);
+    });
+
+    test('a host clock that jumps backwards does not rewind the plot', () {
+      DateTime now = start;
+      final MonitorProvider provider = liveProvider(() => now);
+      addTearDown(provider.dispose);
+
+      final int base = start.millisecondsSinceEpoch;
+      for (int i = 0; i < 30; i++) {
+        provider.pushSnapshot(
+          PcStatus.fromTelemetry(telemetry()),
+          hostTimeMs: base + i * 1000,
+        );
+        now = now.add(const Duration(seconds: 1));
+      }
+      // An NTP correction mid-stream.
+      for (int i = 0; i < 30; i++) {
+        provider.pushSnapshot(
+          PcStatus.fromTelemetry(telemetry()),
+          hostTimeMs: base + 30000 - 5000 + i * 1000,
+        );
+        now = now.add(const Duration(seconds: 1));
+      }
+
+      final List<int> times = provider.cpuHistory.timesMs;
+      for (int i = 1; i < times.length; i++) {
+        expect(
+          times[i],
+          greaterThanOrEqualTo(times[i - 1]),
+          reason: 'timestamps must stay ordered even when the host clock jumps',
+        );
+      }
+      expect(provider.cpuHistory.spanMs, 60000);
+    });
+
+    test('reconnecting forgets the timeline', () {
+      DateTime now = start;
+      final MonitorProvider provider = liveProvider(() => now);
+      addTearDown(provider.dispose);
+
+      feed(provider, (Duration d) => now = now.add(d), 90,
+          const Duration(seconds: 1));
+      expect(provider.cpuHistory.spanMs, 60000);
 
       provider.useSimulation(true);
-      expect(provider.historyPoints, kDashboardHistoryPoints);
+      // The simulator seeds one sample; a stale minute must not survive into it.
+      expect(provider.cpuHistory.length, 1);
 
       provider.useSimulation(false);
-      feed(provider, (Duration d) => now = now.add(d), 8, const Duration(seconds: 1));
-      expect(provider.historyPoints, 60);
+      expect(provider.cpuHistory.isEmpty, isTrue);
+
+      feed(provider, (Duration d) => now = now.add(d), 8,
+          const Duration(seconds: 1));
+      expect(provider.historyPoints, 8);
+      expect(provider.cpuHistory.spanMs, 7000);
     });
   });
 

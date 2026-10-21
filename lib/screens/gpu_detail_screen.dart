@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../models/history_window.dart';
 import '../models/pc_status.dart';
 import '../responsive/responsive.dart';
 import '../services/monitor_provider.dart';
@@ -173,7 +174,7 @@ class _GpuCard extends StatelessWidget {
   final bool isHome;
 
   /// This adapter's own 60 s window, drawn as the card's dynamic curve.
-  final List<double?> history;
+  final HistoryWindow history;
 
   final VoidCallback onTap;
 
@@ -258,7 +259,8 @@ class _GpuCard extends StatelessWidget {
             child: Padding(
               padding: EdgeInsets.symmetric(vertical: metrics.px(8)),
               child: Sparkline(
-                points: history,
+                points: history.values,
+                times: history.timesMs,
                 color: theme.gpu,
                 thresholdColor: theme.hot,
               ),

@@ -224,12 +224,15 @@ void main() {
       final MonitorProvider provider = liveProvider();
       addTearDown(provider.dispose);
 
-      final List<double?> discrete = provider.gpuHistoryFor('gpu-luid-10de');
-      final List<double?> integrated = provider.gpuHistoryFor('gpu-luid-8086');
+      final List<double?> discrete =
+          provider.gpuHistoryFor('gpu-luid-10de').values;
+      final List<double?> integrated =
+          provider.gpuHistoryFor('gpu-luid-8086').values;
 
-      // The window is pre-seeded with gaps and samples shift in from the end.
-      expect(discrete.length, kDashboardHistoryPoints);
-      expect(integrated.length, kDashboardHistoryPoints);
+      // One sample per snapshot: there is no pre-filled buffer to age out,
+      // every adapter starts its own window on the first frame.
+      expect(discrete.length, 12);
+      expect(integrated.length, 12);
       expect(discrete.whereType<double>().length, 12);
       expect(integrated.whereType<double>().length, 12);
 
@@ -252,7 +255,7 @@ void main() {
       });
       provider.pushSnapshot(bare);
 
-      expect(provider.gpuHistoryFor('gpu-x').last, 7.0);
+      expect(provider.gpuHistoryFor('gpu-x').values.last, 7.0);
     });
   });
 
@@ -645,12 +648,11 @@ void main() {
       // Before the growable-list fix the first adapter's window stayed all
       // null and the second adapter never got a window at all (the add threw
       // and aborted the loop) - which is exactly the "inconsistent
-      // backgrounds, no waveform" report from the device.
-      expect(provider.gpuHistoryFor('gpu-luid-10de').length,
-          kDashboardHistoryPoints);
-      expect(provider.gpuHistoryFor('gpu-luid-8086').length,
-          kDashboardHistoryPoints);
-      expect(provider.gpuHistoryFor('gpu-luid-8086').last, 2.0);
+      // backgrounds, no waveform" report from the device. Both now own a
+      // window from the first frame, and it holds exactly that first sample.
+      expect(provider.gpuHistoryFor('gpu-luid-10de').length, 1);
+      expect(provider.gpuHistoryFor('gpu-luid-8086').length, 1);
+      expect(provider.gpuHistoryFor('gpu-luid-8086').values.last, 2.0);
     });
   });
 
@@ -777,7 +779,7 @@ void main() {
       final MonitorProvider provider = splitProvider();
       addTearDown(provider.dispose);
 
-      expect(provider.gpuHistoryFor('gpu-split').last, 90.0);
+      expect(provider.gpuHistoryFor('gpu-split').values.last, 90.0);
     });
 
     testWidgets('the device card headline and caption use the total',

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'models/pc_status.dart';
 import 'responsive/responsive.dart';
 import 'screens/host_connect_screen.dart';
 import 'screens/monitor_shell.dart';
@@ -83,7 +84,8 @@ class _PcMonitorAppState extends State<PcMonitorApp> {
 
     _connection = HostConnectionController(
       store: PairingStore(_store),
-      onSnapshot: _provider.pushSnapshot,
+      onSnapshot: (PcStatus status, int? hostTimeMs) =>
+          _provider.pushSnapshot(status, hostTimeMs: hostTimeMs),
     );
     _connection.addListener(_publishLinkState);
     // The stored skin was already applied when the controller was built, so
