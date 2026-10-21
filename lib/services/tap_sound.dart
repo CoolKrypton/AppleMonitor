@@ -26,7 +26,6 @@
 library;
 
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/foundation.dart';
@@ -184,11 +183,13 @@ class TapSoundController extends ChangeNotifier {
 ///
 /// The player is built in [prime] rather than in a field initialiser on
 /// purpose. `AudioPlayer` opens a native session in its constructor and
-/// reports a failure through `creatingCompleter`; a completer whose error is
-/// never awaited surfaces as an unhandled exception - which fails a widget
-/// test outright and logs a crash on a device without an audio session. So the
-/// very first thing [prime] does is await exactly that future, in the same
-/// synchronous run that created the player.
+/// reports a failure through a future that every public method awaits; if
+/// nothing ever awaits it, Dart reports the failure as an unhandled exception -
+/// which fails a widget test outright and logs a crash on a device with no
+/// audio session. So [prime] calls a public method *first*, in the same
+/// synchronous run that created the player, which attaches a listener before
+/// the failure can be delivered. (`creatingCompleter` would be the direct way
+/// to do it, but it is marked visible-for-testing.)
 class _TapVoice {
   AudioPlayer? _player;
 
@@ -202,14 +203,13 @@ class _TapVoice {
   Future<void> prime(Uint8List bytes) async {
     try {
       final AudioPlayer player = _player = AudioPlayer();
-      await player.creatingCompleter.future;
+      await player.setVolume(_volume);
       final AudioContext? context = _tapContext();
       if (context != null) await player.setAudioContext(context);
       // `stop`, not the default `release`: releasing drops the source, and the
       // next tap would have to decode the whole file again.
       await player.setReleaseMode(ReleaseMode.stop);
       await player.setSourceBytes(bytes, mimeType: 'audio/wav');
-      await player.setVolume(_volume);
       ready = true;
     } catch (_) {
       ready = false;
