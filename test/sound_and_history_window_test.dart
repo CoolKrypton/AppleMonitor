@@ -121,8 +121,9 @@ void main() {
       final MonitorProvider provider = liveProvider(() => now);
       addTearDown(provider.dispose);
 
-      feed(provider, (Duration d) => now = now.add(d), 200,
-          const Duration(milliseconds: 500));
+      // 0.5 Hz: thirty samples plus both ends of the minute.
+      feed(provider, (Duration d) => now = now.add(d), 120,
+          const Duration(seconds: 2));
 
       expect(provider.historyPoints, 31);
       expect(provider.cpuHistory.spanMs, 60000);
@@ -219,8 +220,8 @@ void main() {
         );
         now = now.add(const Duration(seconds: 1));
       }
-      // An NTP correction mid-stream.
-      for (int i = 0; i < 30; i++) {
+      // An NTP correction mid-stream, five seconds backwards.
+      for (int i = 0; i < 40; i++) {
         provider.pushSnapshot(
           PcStatus.fromTelemetry(telemetry()),
           hostTimeMs: base + 30000 - 5000 + i * 1000,
